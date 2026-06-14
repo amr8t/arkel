@@ -15,7 +15,9 @@ pub struct BootstrapConfig {
 /// Runtime mode for this Arkel node.
 pub enum NodeMode {
     /// Index Node: Cluster consensus and metadata tracker.
-    /// Uses a bare Iroh endpoint bound directly to `http_addr`.
+    /// Uses a bare Iroh endpoint bound directly to `http_addr`. The endpoint is
+    /// kept alive for future gateway<->storage use; Raft traffic now runs over
+    /// HTTP on `http_addr`.
     Index {
         bootstrap: BootstrapConfig,
         http_addr: SocketAddr,
@@ -116,7 +118,7 @@ async fn run_index_node(
     let node_id = arkel.identity.raft_node_id();
     tracing::info!("Running Index Engine {node_id}. Spinning up OpenRaft v0.9...");
 
-    let store = crate::index::ArkelStore::new();
+    let store = index::ArkelStore::new();
     let store_for_api = store.clone();
     let (log_store, state_machine) = openraft::storage::Adaptor::new(store);
 
@@ -127,100 +129,43 @@ async fn run_index_node(
         ..Default::default()
     });
 
-    let network = crate::index::ArkelRaftNetwork::new(endpoint.clone());
+    let network = index::ArkelRaftNetwork::new();
     let raft = openraft::Raft::new(node_id, config, network, log_store, state_machine)
         .await
         .context("Failed to spin up core Raft engine")
         .expect("Raft engine startup failed");
 
-    // --- Index HTTP API server ---
+    let state = std::sync::Arc::new(crate::api::AppState {
+        raft: raft.clone(),
+        store: store_for_api,
+    });
+
     let listener = tokio::net::TcpListener::bind(http_addr)
         .await
         .expect("Failed to bind HTTP API listener");
-    tokio::spawn(crate::api::serve_index(
-        listener,
-        raft.clone(),
-        store_for_api,
-    ));
+    let app = crate::api::router()
+        .merge(index::rpc::raft_router(state.clone()))
+        .with_state(state);
+    tokio::spawn(crate::api::serve_index(listener, app));
 
-    // --- Live ALPN Wire RPC Handler ---
-    let raft_handler = raft.clone();
-    let endpoint_incoming = endpoint.clone();
+    // Keep the Iroh endpoint alive for future gateway<->storage use.
+    let _endpoint = endpoint;
 
-    tokio::spawn(async move {
-        while let Some(incoming) = endpoint_incoming.accept().await {
-            let connecting = match incoming.accept() {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
+    initialize_raft_cluster(raft, arkel, bootstrap, node_id, http_addr).await;
+}
 
-            let raft = raft_handler.clone();
-            tokio::spawn(async move {
-                let connection = match connecting.await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::debug!("accept connection failed: {}", e);
-                        return;
-                    }
-                };
-
-                while let Ok((mut send, mut recv)) = connection.accept_bi().await {
-                    let raft = raft.clone();
-                    tokio::spawn(async move {
-                        match recv.read_to_end(1024 * 1024).await {
-                            Ok(buffer) => {
-                                if let Ok(msg) =
-                                    serde_json::from_slice::<crate::index::RaftMessage>(&buffer)
-                                {
-                                    match msg {
-                                        crate::index::RaftMessage::AppendEntries(req) => {
-                                            match raft.append_entries(req).await {
-                                                Ok(resp) => {
-                                                    let out = serde_json::to_vec(&resp).unwrap();
-                                                    send.write_all(&out).await.ok();
-                                                    send.finish().ok();
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!(
-                                                        "append_entries failed: {:?}",
-                                                        e
-                                                    );
-                                                    send.finish().ok();
-                                                }
-                                            }
-                                        }
-                                        crate::index::RaftMessage::Vote(req) => {
-                                            match raft.vote(req).await {
-                                                Ok(resp) => {
-                                                    let out = serde_json::to_vec(&resp).unwrap();
-                                                    send.write_all(&out).await.ok();
-                                                    send.finish().ok();
-                                                }
-                                                Err(e) => {
-                                                    tracing::error!("vote failed: {:?}", e);
-                                                    send.finish().ok();
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::debug!("recv.read_to_end failed: {}", e);
-                            }
-                        }
-                    });
-                }
-            });
-        }
-    });
-
-    // --- Cluster Membership Logic ---
+async fn initialize_raft_cluster(
+    raft: openraft::Raft<index::ArkelRaftConfig>,
+    arkel: Arkel,
+    bootstrap: BootstrapConfig,
+    node_id: index::NodeId,
+    http_addr: SocketAddr,
+) {
     let my_full_addr = arkel.identity.raft_full_addr(http_addr);
     let mut initial_members = std::collections::BTreeMap::new();
 
     for peer in &bootstrap.peer_addresses {
-        let peer_id = crate::identity::raft_node_id_from_addr(peer);
+        let peer_id = identity::raft_node_id_from_addr(peer);
         initial_members.insert(peer_id, openraft::impls::BasicNode::new(peer.clone()));
     }
 
@@ -228,6 +173,8 @@ async fn run_index_node(
         .entry(node_id)
         .or_insert_with(|| openraft::impls::BasicNode::new(my_full_addr));
 
+    // Bootstrap: pick a deterministic node to initialize the cluster. Using the
+    // lowest node id is simple and avoids multiple nodes racing to initialize.
     let min_node_id = initial_members.keys().next().copied().unwrap_or(node_id);
 
     if node_id == min_node_id {

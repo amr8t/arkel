@@ -13,6 +13,22 @@ pub struct ArkelStateMachine {
     pub last_membership: openraft::StoredMembership<NodeId, openraft::impls::BasicNode>,
 }
 
+impl IndexResponse {
+    pub fn ok() -> Self {
+        Self {
+            success: true,
+            error: None,
+        }
+    }
+
+    pub fn err(s: &str) -> Self {
+        Self {
+            success: false,
+            error: Some(s.to_string()),
+        }
+    }
+}
+
 impl ArkelStateMachine {
     pub fn new() -> Self {
         Self {
@@ -32,24 +48,15 @@ impl ArkelStateMachine {
         match cmd {
             IndexCommand::CreateBucket { name } => {
                 self.buckets.entry(name.clone()).or_insert(now);
-                IndexResponse {
-                    success: true,
-                    error: None,
-                }
+                IndexResponse::ok()
             }
             IndexCommand::DeleteBucket { name } => {
                 if self.buckets.remove(&name).is_some() {
                     // Also remove all objects in the bucket
                     self.objects.retain(|(b, _), _| b != &name);
-                    IndexResponse {
-                        success: true,
-                        error: None,
-                    }
+                    IndexResponse::ok()
                 } else {
-                    IndexResponse {
-                        success: false,
-                        error: Some(format!("Bucket '{}' not found", name)),
-                    }
+                    IndexResponse::err(&format!("Bucket '{}' not found", name))
                 }
             }
             IndexCommand::PutObject(meta) => {
@@ -57,10 +64,7 @@ impl ArkelStateMachine {
                 self.buckets.entry(meta.bucket.clone()).or_insert(now);
                 self.objects
                     .insert((meta.bucket.clone(), meta.key.clone()), meta);
-                IndexResponse {
-                    success: true,
-                    error: None,
-                }
+                IndexResponse::ok()
             }
             IndexCommand::DeleteObject { bucket, key } => {
                 if self
@@ -68,15 +72,9 @@ impl ArkelStateMachine {
                     .remove(&(bucket.clone(), key.clone()))
                     .is_some()
                 {
-                    IndexResponse {
-                        success: true,
-                        error: None,
-                    }
+                    IndexResponse::ok()
                 } else {
-                    IndexResponse {
-                        success: false,
-                        error: Some(format!("Object '{}/{}' not found", bucket, key)),
-                    }
+                    IndexResponse::err(&format!("Object '{}/{}' not found", bucket, key))
                 }
             }
         }
@@ -227,15 +225,9 @@ impl openraft::RaftStorage<ArkelRaftConfig> for ArkelStore {
                 openraft::EntryPayload::Membership(mem) => {
                     sm.last_membership =
                         openraft::StoredMembership::new(Some(entry.log_id), mem.clone());
-                    responses.push(IndexResponse {
-                        success: true,
-                        error: None,
-                    });
+                    responses.push(IndexResponse::ok());
                 }
-                _ => responses.push(IndexResponse {
-                    success: true,
-                    error: None,
-                }),
+                _ => responses.push(IndexResponse::ok()),
             }
         }
         Ok(responses)

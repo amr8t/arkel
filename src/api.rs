@@ -15,22 +15,14 @@ pub struct AppState {
     pub store: ArkelStore,
 }
 
-pub fn router(state: Arc<AppState>) -> Router {
+pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_buckets))
         .route("/:bucket", put(create_bucket))
         .route("/:bucket/:key", put(put_object).get(get_object))
-        .with_state(state)
 }
 
-pub async fn serve_index(
-    listener: tokio::net::TcpListener,
-    raft: openraft::Raft<ArkelRaftConfig>,
-    store: ArkelStore,
-) {
-    let state = Arc::new(AppState { raft, store });
-    let app = router(state);
-
+pub async fn serve_index(listener: tokio::net::TcpListener, app: Router) {
     tracing::info!("Index HTTP API listening on {}", listener.local_addr().unwrap_or_else(|_| std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
 
     if let Err(e) = axum::serve(listener, app).await {

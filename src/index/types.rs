@@ -43,8 +43,3 @@ openraft::declare_raft_types!(
         Node = openraft::impls::BasicNode
 );
 
-#[derive(Serialize, Deserialize)]
-pub enum RaftMessage {
-    AppendEntries(openraft::raft::AppendEntriesRequest<ArkelRaftConfig>),
-    Vote(openraft::raft::VoteRequest<NodeId>),
-}
