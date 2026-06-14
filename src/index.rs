@@ -6,22 +6,31 @@ use tokio::sync::RwLock;
 
 pub type NodeId = u64;
 
-/// The structure of a metadata record tracking file boundaries
+/// Metadata record for an object stored in the global catalog.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct BlobMetadata {
+pub struct ObjectMetadata {
+    pub bucket: String,
+    pub key: String,
     pub blob_hash: String,
+    pub etag: String,
     pub size: u64,
+    pub content_type: Option<String>,
+    pub version: Option<String>,
     pub storage_nodes: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
-/// System modifications committed to the Raft consensus log
+/// System modifications committed to the Raft consensus log.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum IndexCommand {
-    RegisterBlob(BlobMetadata),
-    DeleteBlob { blob_hash: String },
+    PutObject(ObjectMetadata),
+    DeleteObject { bucket: String, key: String },
+    CreateBucket { name: String },
+    DeleteBucket { name: String },
 }
 
-/// The response confirmation sent back to the control api
+/// The response confirmation sent back to the control API.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexResponse {
     pub success: bool,
@@ -37,10 +46,11 @@ openraft::declare_raft_types!(
         Node = openraft::impls::BasicNode
 );
 
-/// In-Memory State Machine Tracking the Global Catalog
+/// In-memory state machine tracking buckets and objects.
 #[derive(Debug, Default, Clone)]
 pub struct ArkelStateMachine {
-    pub catalog: HashMap<String, BlobMetadata>,
+    pub buckets: HashMap<String, u64>,                      // bucket -> created_at
+    pub objects: HashMap<(String, String), ObjectMetadata>,   // (bucket, key) -> metadata
     pub last_applied_log: Option<openraft::LogId<NodeId>>,
     pub last_membership: openraft::StoredMembership<NodeId, openraft::impls::BasicNode>,
 }
@@ -48,23 +58,31 @@ pub struct ArkelStateMachine {
 impl ArkelStateMachine {
     pub fn new() -> Self {
         Self {
-            catalog: HashMap::new(),
+            buckets: HashMap::new(),
+            objects: HashMap::new(),
             last_applied_log: None,
             last_membership: openraft::StoredMembership::default(),
         }
     }
 
     pub fn apply_command(&mut self, cmd: IndexCommand) -> IndexResponse {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         match cmd {
-            IndexCommand::RegisterBlob(meta) => {
-                self.catalog.insert(meta.blob_hash.clone(), meta);
+            IndexCommand::CreateBucket { name } => {
+                self.buckets.entry(name.clone()).or_insert(now);
                 IndexResponse {
                     success: true,
                     error: None,
                 }
             }
-            IndexCommand::DeleteBlob { blob_hash } => {
-                if self.catalog.remove(&blob_hash).is_some() {
+            IndexCommand::DeleteBucket { name } => {
+                if self.buckets.remove(&name).is_some() {
+                    // Also remove all objects in the bucket
+                    self.objects.retain(|(b, _), _| b != &name);
                     IndexResponse {
                         success: true,
                         error: None,
@@ -72,7 +90,29 @@ impl ArkelStateMachine {
                 } else {
                     IndexResponse {
                         success: false,
-                        error: Some("Target hash not found in index".to_string()),
+                        error: Some(format!("Bucket '{}' not found", name)),
+                    }
+                }
+            }
+            IndexCommand::PutObject(meta) => {
+                // Implicitly create bucket if it doesn't exist
+                self.buckets.entry(meta.bucket.clone()).or_insert(now);
+                self.objects.insert((meta.bucket.clone(), meta.key.clone()), meta);
+                IndexResponse {
+                    success: true,
+                    error: None,
+                }
+            }
+            IndexCommand::DeleteObject { bucket, key } => {
+                if self.objects.remove(&(bucket.clone(), key.clone())).is_some() {
+                    IndexResponse {
+                        success: true,
+                        error: None,
+                    }
+                } else {
+                    IndexResponse {
+                        success: false,
+                        error: Some(format!("Object '{}/{}' not found", bucket, key)),
                     }
                 }
             }
@@ -288,7 +328,7 @@ impl ArkelRaftConnection {
             iroh::EndpointAddr::new(public_key).with_ip_addr(socket_addr)
         } else {
             return Err(anyhow::anyhow!(
-                "Address format must be '<iroh_public_key>@<ip:port>' for cryptographic handshakes."
+                "Address format must be '<iroh_public_key>@<ip>:<port>' for cryptographic handshakes."
             ));
         };
 

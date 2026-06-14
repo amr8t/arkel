@@ -4,6 +4,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
+pub mod api;
 pub mod identity;
 pub mod index;
 
@@ -90,6 +91,7 @@ impl Arkel {
                 tracing::info!("Running Index Engine {node_id}. Spinning up OpenRaft v0.9...");
 
                 let store = crate::index::ArkelStore::new();
+                let store_for_api = store.clone();
                 let (log_store, state_machine) = openraft::storage::Adaptor::new(store);
 
                 let config = std::sync::Arc::new(openraft::Config {
@@ -103,6 +105,14 @@ impl Arkel {
                 let raft = openraft::Raft::new(node_id, config, network, log_store, state_machine)
                     .await
                     .context("Failed to spin up core Raft engine")?;
+
+                // --- Index HTTP API server ---
+                let listener = tokio::net::TcpListener::bind(&http_addr).await?;
+                tokio::spawn(crate::api::serve_index(
+                    listener,
+                    raft.clone(),
+                    store_for_api,
+                ));
 
                 // --- Live ALPN Wire RPC Handler ---
                 let raft_handler = raft.clone();
