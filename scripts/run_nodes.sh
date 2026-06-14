@@ -17,6 +17,18 @@ NODE1_LOG="$LOG_DIR/node1.log"
 NODE2_LOG="$LOG_DIR/node2.log"
 NODE3_LOG="$LOG_DIR/node3.log"
 
+# --- Build binary once so we can launch it directly (cleaner PIDs for cleanup) ---
+echo "[build] Building arkel binary..."
+cargo build --quiet
+ARKEL_BIN="./target/debug/arkel"
+
+# --- Helper: kill leftover arkel/cargo processes for a set of addresses ---
+kill_arkel_by_addr() {
+    for addr in "$@"; do
+        pkill -f "arkel index --http-addr $addr" 2>/dev/null || true
+    done
+}
+
 # --- Helper: wait for a string to appear in a log ---
 wait_for_log() {
     local log="$1"
@@ -62,7 +74,7 @@ start_for_identity() {
     local addr="$1"
     local log="$2"
     # Use RUST_LOG=info so the "Full Address" INFO line is captured.
-    RUST_LOG=info cargo run --quiet -- index --http-addr "$addr" > "$log" 2>&1 &
+    RUST_LOG=info "$ARKEL_BIN" index --http-addr "$addr" > "$log" 2>&1 &
     echo $!
 }
 
@@ -99,6 +111,9 @@ EOF
 echo "[identity] Killing temporary instances..."
 kill $PID1 $PID2 $PID3 2>/dev/null || true
 wait 2>/dev/null || true
+# Also ensure no lingering binaries are left behind
+kill_arkel_by_addr "$NODE1_ADDR" "$NODE2_ADDR" "$NODE3_ADDR"
+wait 2>/dev/null || true
 
 # Clear raft logs (state is in-memory; keep identity.key files)
 rm -f "$NODE1_LOG" "$NODE2_LOG" "$NODE3_LOG"
@@ -115,7 +130,7 @@ start_node() {
     local addr="$1"
     local log="$2"
     RUST_LOG="$RUST_LOG" \
-        cargo run --quiet -- index --http-addr "$addr" --peer-addresses "$FULL_PEERS" \
+        "$ARKEL_BIN" index --http-addr "$addr" --peer-addresses "$FULL_PEERS" \
         > "$log" 2>&1 &
     echo $!
 }
@@ -127,10 +142,19 @@ sleep 1
 PID3=$(start_node "$NODE3_ADDR" "$NODE3_LOG")
 
 cleanup() {
+    # Avoid re-running if EXIT fires while we're already cleaning up.
+    trap - INT TERM EXIT
+
     echo ""
     echo "Stopping nodes..."
+    # PID1/2/3 point directly at the arkel binaries now.
     kill $PID1 $PID2 $PID3 2>/dev/null || true
     wait 2>/dev/null || true
+    # Defensive: sweep any stragglers by address pattern.
+    kill_arkel_by_addr "$NODE1_ADDR" "$NODE2_ADDR" "$NODE3_ADDR"
+    wait 2>/dev/null || true
+    echo "Done."
+    exit 0
 }
 trap cleanup INT TERM EXIT
 

@@ -70,4 +70,39 @@ impl NodeIdentity {
     pub fn secret_key(&self) -> &SecretKey {
         &self.secret_key
     }
+
+    /// Returns the 64-bit identifier OpenRaft uses for this node.
+    /// Derived from the first 8 little-endian bytes of the public key.
+    pub fn raft_node_id(&self) -> u64 {
+        let node_id = self.node_id();
+        let bytes = node_id.as_bytes();
+        u64::from_le_bytes(bytes[..8].try_into().expect("public key >= 8 bytes"))
+    }
+
+    /// Formats the node's full raft address as `<pubkey>@<ip>:<port>`.
+    pub fn raft_full_addr(&self, addr: std::net::SocketAddr) -> String {
+        format!("{}@{}", self.node_id(), addr)
+    }
+}
+
+/// Derive an OpenRaft node ID from an Iroh public key.
+pub fn raft_node_id_from_pubkey(pubkey: &NodeId) -> u64 {
+    let bytes = pubkey.as_bytes();
+    u64::from_le_bytes(bytes[..8].try_into().expect("public key >= 8 bytes"))
+}
+
+/// Derive an OpenRaft node ID from a full raft address string (`<pubkey>@<ip>:<port>`).
+pub fn raft_node_id_from_addr(addr: &str) -> u64 {
+    let id_str = addr.split_once('@').map(|(s, _)| s).unwrap_or(addr);
+    id_str
+        .parse::<NodeId>()
+        .map(|pk| raft_node_id_from_pubkey(&pk))
+        .unwrap_or_else(|_| {
+            // Fallback for malformed addresses (should not happen in normal use).
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            addr.hash(&mut hasher);
+            hasher.finish()
+        })
 }

@@ -38,6 +38,7 @@ enum Commands {
         private_relay_url: Option<String>,
     },
 }
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -53,36 +54,21 @@ async fn main() -> Result<()> {
     });
 
     let arkel = Arkel::init(base_dir.clone()).await?;
+    let node_id = arkel.identity.raft_node_id();
 
     let mode = match cli.command {
         Commands::Index {
             http_addr,
             peer_addresses,
         } => {
-            // 1. Derive identity and NodeID
-            // Using the public key to generate the unique identifier for OpenRaft
-            let pub_key = arkel.identity.secret_key().public();
-            let node_id_bytes = pub_key.as_bytes();
+            let my_full_addr = arkel.identity.raft_full_addr(http_addr);
 
-            // OpenRaft requires a u64 for its internal node identification
-            let node_id = u64::from_le_bytes(
-                node_id_bytes[..8]
-                    .try_into()
-                    .expect("PublicKey must be at least 8 bytes"),
-            );
-
-            // 2. Format the local address as required by Iroh's cryptographic handshake
-            // Format: <iroh_public_key>@<ip:port>
-            let my_full_addr = format!("{}@{}", pub_key, http_addr);
-
-            // 3. Filter peers to avoid self-referential network loops
-            // We compare against the fully qualified address string
+            // Filter peers to avoid self-referential network loops
             let filtered_peers: Vec<String> = peer_addresses
                 .into_iter()
                 .filter(|addr| addr != &my_full_addr)
                 .collect();
 
-            // 4. Log startup information for debugging connectivity
             tracing::info!("==================================================");
             tracing::info!("Arkel Index Node Initialized");
             tracing::info!("Local Node ID : {}", node_id);
@@ -92,13 +78,11 @@ async fn main() -> Result<()> {
             }
             tracing::info!("==================================================");
 
-            // 5. Construct the Index mode for the Arkel engine
             NodeMode::Index {
-                node_id,
                 bootstrap: BootstrapConfig {
                     peer_addresses: filtered_peers,
                 },
-                http_addr: http_addr.to_string(),
+                http_addr,
             }
         }
         Commands::Storage { private_relay_url } => {
