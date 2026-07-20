@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
-use iroh::{PublicKey as NodeId, SecretKey};
+use iroh::SecretKey;
 use std::path::Path;
 use tokio::fs::{self};
+
+pub use iroh::PublicKey as NodeId;
 
 pub struct NodeIdentity {
     secret_key: SecretKey,
