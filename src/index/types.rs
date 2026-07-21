@@ -3,57 +3,52 @@ use std::fmt;
 
 pub type NodeId = u64;
 
-/// Metadata record for an object stored in the global catalog.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ObjectMetadata {
-    pub bucket: String,
-    pub key: String,
-    pub blob_hash: String,
-    pub etag: String,
-    pub size: u64,
-    pub content_type: Option<String>,
-    pub version: Option<String>,
-    pub storage_nodes: Vec<String>,
-    pub created_at: u64,
-    pub updated_at: u64,
-}
-
-impl fmt::Display for ObjectMetadata {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "ObjectMetadata {{ bucket: {}, key: {}, size: {}, etag: {} }}",
-            self.bucket, self.key, self.size, self.etag
-        )
-    }
-}
-
 /// System modifications committed to the Raft consensus log.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum IndexNodeRequest {
-    PutObject(ObjectMetadata),
-    DeleteObject { bucket: String, key: String },
     CreateBucket {
         name: String,
         #[serde(default)]
         created_at: u64,
     },
-    DeleteBucket { name: String },
+    DeleteBucket {
+        name: String,
+    },
+    CommitManifest {
+        bucket: String,
+        key: String,
+        object_hash: Vec<u8>,
+        manifest_bytes: Vec<u8>,
+        signature: Vec<u8>,
+    },
+    GetManifest {
+        object_hash: Vec<u8>,
+    },
     Batch(Vec<IndexNodeRequest>),
+    RegisterNode {
+        node_id: Vec<u8>,
+        capacity_bytes: u64,
+        addr: String,
+    },
 }
 
 impl fmt::Display for IndexNodeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            IndexNodeRequest::PutObject(meta) => write!(f, "PutObject({})", meta),
-            IndexNodeRequest::DeleteObject { bucket, key } => {
-                write!(f, "DeleteObject({}/{})", bucket, key)
-            }
             IndexNodeRequest::CreateBucket { name, created_at } => {
                 write!(f, "CreateBucket({}, {})", name, created_at)
             }
             IndexNodeRequest::DeleteBucket { name } => write!(f, "DeleteBucket({})", name),
+            IndexNodeRequest::CommitManifest { object_hash, .. } => {
+                write!(f, "CommitManifest({})", hex::encode(object_hash))
+            }
+            IndexNodeRequest::GetManifest { object_hash } => {
+                write!(f, "GetManifest({})", hex::encode(object_hash))
+            }
             IndexNodeRequest::Batch(entries) => write!(f, "Batch({} entries)", entries.len()),
+            IndexNodeRequest::RegisterNode { node_id, .. } => {
+                write!(f, "RegisterNode({})", hex::encode(node_id))
+            }
         }
     }
 }
@@ -100,3 +95,18 @@ openraft::declare_raft_types!(
         NodeId = u64,
         Node = crate::ArkelIndexNode,
 );
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeStats {
+    pub node_id: Vec<u8>,
+    pub capacity_bytes: u64,
+    pub addr: String,
+    pub last_seen: u64, // Raft log index of last heartbeat
+    pub status: NodeStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum NodeStatus {
+    Online,
+    Offline,
+}

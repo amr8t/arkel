@@ -1,16 +1,15 @@
 use crate::index::{
-    ArkelRaftConfig, ArkelStateMachine, IndexNodeRequest, IndexNodeResponse, ObjectMetadata,
+    ArkelRaftConfig, ArkelStateMachine, IndexNodeRequest, IndexNodeResponse,
 };
 use axum::{
     Router,
-    body::Bytes,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, put},
 };
 use openraft::raft::ClientWriteResponse;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -137,7 +136,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_buckets))
         .route("/:bucket", put(create_bucket).get(list_objects))
-        .route("/:bucket/:key", put(put_object).get(get_object))
+        .route("/manifest/:bucket/:key", put(commit_manifest).get(read_manifest))
 }
 
 pub async fn serve_index(listener: tokio::net::TcpListener, app: Router) {
@@ -201,36 +200,25 @@ pub struct ListedObject {
     pub size: u64,
 }
 
-async fn put_object(
+#[derive(Deserialize)]
+pub struct CommitManifestPayload {
+    pub object_hash: Vec<u8>,
+    pub manifest_bytes: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+async fn commit_manifest(
     State(state): State<Arc<AppState>>,
     Path((bucket, key)): Path<(String, String)>,
-    headers: axum::http::HeaderMap,
-    body: Bytes,
+    Json(payload): Json<CommitManifestPayload>,
 ) -> impl IntoResponse {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let content_type = headers
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let meta = ObjectMetadata {
-        bucket: bucket.clone(),
-        key: key.clone(),
-        blob_hash: "test-hash".to_string(),
-        etag: "test-etag".to_string(),
-        size: body.len() as u64,
-        content_type,
-        version: None,
-        storage_nodes: Vec::new(),
-        created_at: now,
-        updated_at: now,
+    let cmd = IndexNodeRequest::CommitManifest {
+        bucket,
+        key,
+        object_hash: payload.object_hash,
+        manifest_bytes: payload.manifest_bytes,
+        signature: payload.signature,
     };
-
-    let cmd = IndexNodeRequest::PutObject(meta);
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err(e) => {
@@ -240,13 +228,18 @@ async fn put_object(
     }
 }
 
-async fn get_object(
+async fn read_manifest(
     State(state): State<Arc<AppState>>,
     Path((bucket, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match state.state_machine.get_object(&bucket, &key).await {
-        Ok(Some(meta)) => Json(meta).into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(())).into_response(),
+    match state.state_machine.read_manifest(&bucket, &key).await {
+        Ok(Some((manifest_bytes, signature))) => {
+            Json(serde_json::json!({
+                "manifest_bytes": manifest_bytes,
+                "signature": signature,
+            })).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -265,16 +258,16 @@ async fn list_objects(
         .and_then(|s| s.parse().ok())
         .unwrap_or(1000);
 
-    match state.state_machine.list_object_metadata(&bucket).await {
-        Ok(metas) => {
-            let mut contents: Vec<_> = metas
+    match state.state_machine.list_objects(&bucket).await {
+        Ok(keys) => {
+            let mut contents: Vec<_> = keys
                 .into_iter()
-                .filter(|m| m.key.starts_with(&prefix))
-                .map(|m| ListedObject {
-                    key: m.key,
-                    last_modified: m.updated_at,
-                    etag: m.etag,
-                    size: m.size,
+                .filter(|k| k.starts_with(&prefix))
+                .map(|k| ListedObject {
+                    key: k,
+                    last_modified: 0,
+                    etag: String::new(),
+                    size: 0,
                 })
                 .collect();
 

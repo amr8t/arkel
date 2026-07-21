@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use iroh::SignatureError;
 use serde::{Deserialize, Serialize};
 

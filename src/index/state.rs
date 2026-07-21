@@ -1,4 +1,7 @@
-use super::{ArkelRaftConfig, IndexNodeRequest, IndexNodeResponse, ObjectMetadata};
+use super::{ArkelRaftConfig, IndexNodeRequest, IndexNodeResponse};
+use crate::index::types::NodeStats;
+use crate::index::types::NodeStatus;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io;
 use std::io::Cursor;
@@ -55,7 +58,7 @@ struct StateMachineSnapshotData {
     // Vec, not HashMap: row order is irrelevant for correctness, and this
     // is exactly what a SQL dump produces.
     buckets: Vec<(String, u64)>,
-    objects: Vec<(String, String, Vec<u8>)>, // (bucket, key, cbor(ObjectMetadata))
+    manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>, // (object_hash, bucket, key, manifest, signature)
 }
 
 #[derive(Debug)]
@@ -65,6 +68,7 @@ struct StateMachineInner {
     last_membership: StoredMembershipOf<ArkelRaftConfig>,
     snapshot_index: u64,
     current_snapshot: Option<(SnapshotMetaOf<ArkelRaftConfig>, Vec<u8>)>,
+    node_registry: HashMap<Vec<u8>, NodeStats>,
 }
 
 const SM_SCHEMA: &str = "
@@ -72,16 +76,19 @@ const SM_SCHEMA: &str = "
         name TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS objects (
+    CREATE TABLE IF NOT EXISTS manifests (
+        object_hash BLOB PRIMARY KEY,
         bucket TEXT NOT NULL,
         key TEXT NOT NULL,
-        metadata BLOB NOT NULL,
-        PRIMARY KEY (bucket, key)
+        manifest BLOB NOT NULL,
+        signature BLOB NOT NULL,
+        created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sm_meta (
         k TEXT PRIMARY KEY,
         v BLOB NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_manifests_bucket_key ON manifests(bucket, key);
 ";
 
 impl StateMachineInner {
@@ -120,6 +127,7 @@ impl StateMachineInner {
             last_membership,
             snapshot_index: 0,
             current_snapshot: None,
+            node_registry: HashMap::new(),
         })
     }
 
@@ -133,8 +141,50 @@ impl StateMachineInner {
     fn apply_command(
         tx: &rusqlite::Transaction<'_>,
         cmd: IndexNodeRequest,
+        log_index: u64,
+        node_registry: &mut HashMap<Vec<u8>, NodeStats>,
     ) -> Result<IndexNodeResponse, io::Error> {
         let result = match cmd {
+            IndexNodeRequest::CommitManifest {
+                bucket,
+                key,
+                object_hash,
+                manifest_bytes,
+                signature,
+            } => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                tx.execute(
+                    "INSERT OR REPLACE INTO manifests (object_hash, bucket, key, manifest, signature, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![object_hash, bucket, key, manifest_bytes, signature, now],
+                )
+                .map_err(to_io_err)?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO buckets (name, created_at) VALUES (?1, ?2)",
+                    rusqlite::params![bucket, now],
+                )
+                .map_err(to_io_err)?;
+                IndexNodeResponse::ok()
+            }
+            IndexNodeRequest::GetManifest { object_hash } => {
+                let mut stmt = tx
+                    .prepare_cached(
+                        "SELECT manifest, signature FROM manifests WHERE object_hash = ?1",
+                    )
+                    .map_err(to_io_err)?;
+                let result = stmt
+                    .query_row(rusqlite::params![object_hash], |row| {
+                        Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    })
+                    .optional()
+                    .map_err(to_io_err)?;
+                match result {
+                    Some(_) => IndexNodeResponse::ok(),
+                    None => IndexNodeResponse::err("Manifest not found"),
+                }
+            }
             IndexNodeRequest::CreateBucket { name, created_at } => {
                 tx.execute(
                     "INSERT OR IGNORE INTO buckets (name, created_at) VALUES (?1, ?2)",
@@ -148,46 +198,38 @@ impl StateMachineInner {
                     .execute("DELETE FROM buckets WHERE name = ?1", params![name])
                     .map_err(to_io_err)?;
                 if rows > 0 {
-                    tx.execute("DELETE FROM objects WHERE bucket = ?1", params![name])
+                    tx.execute("DELETE FROM manifests WHERE bucket = ?1", params![name])
                         .map_err(to_io_err)?;
                     IndexNodeResponse::ok()
                 } else {
                     IndexNodeResponse::err(&format!("Bucket '{}' not found", name))
                 }
             }
-            IndexNodeRequest::PutObject(meta) => {
-                tx.execute(
-                    "INSERT OR IGNORE INTO buckets (name, created_at) VALUES (?1, ?2)",
-                    params![meta.bucket, meta.updated_at as i64],
-                )
-                .map_err(to_io_err)?;
-                let meta_cbor = cbor_to_io(&meta)?;
-                tx.execute(
-                    "INSERT OR REPLACE INTO objects (bucket, key, metadata) VALUES (?1, ?2, ?3)",
-                    params![meta.bucket, meta.key, meta_cbor],
-                )
-                .map_err(to_io_err)?;
-                IndexNodeResponse::ok()
-            }
-            IndexNodeRequest::DeleteObject { bucket, key } => {
-                let rows = tx
-                    .execute(
-                        "DELETE FROM objects WHERE bucket = ?1 AND key = ?2",
-                        params![bucket, key],
-                    )
-                    .map_err(to_io_err)?;
-                if rows > 0 {
-                    IndexNodeResponse::ok()
-                } else {
-                    IndexNodeResponse::err(&format!("Object '{}/{}' not found", bucket, key))
-                }
-            }
+
             IndexNodeRequest::Batch(entries) => {
                 let responses: Vec<IndexNodeResponse> = entries
                     .into_iter()
-                    .map(|entry| Self::apply_command(tx, entry))
+                    .map(|entry| Self::apply_command(tx, entry, log_index, node_registry))
                     .collect::<Result<Vec<_>, _>>()?;
                 IndexNodeResponse::batch(responses)
+            }
+
+            IndexNodeRequest::RegisterNode {
+                node_id,
+                capacity_bytes,
+                addr,
+            } => {
+                node_registry.insert(
+                    node_id.clone(),
+                    NodeStats {
+                        node_id,
+                        capacity_bytes,
+                        addr,
+                        last_seen: log_index,
+                        status: NodeStatus::Online,
+                    },
+                );
+                IndexNodeResponse::ok()
             }
         };
         Ok(result)
@@ -200,7 +242,7 @@ impl StateMachineInner {
 #[derive(Clone)]
 pub struct ArkelStateMachineSnapshot {
     buckets: Vec<(String, u64)>,
-    objects: Vec<(String, String, Vec<u8>)>,
+    manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>,
     last_applied_log: Option<LogIdOf<ArkelRaftConfig>>,
     last_membership: StoredMembershipOf<ArkelRaftConfig>,
     snapshot_index: u64,
@@ -243,16 +285,18 @@ impl ArkelStateMachine {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(to_io_err)?;
 
-        let mut objects_stmt = sm
+        let mut stmt = sm
             .conn
-            .prepare_cached("SELECT bucket, key, metadata FROM objects")
+            .prepare_cached("SELECT object_hash, bucket, key, manifest, signature FROM manifests")
             .map_err(to_io_err)?;
-        let objects = objects_stmt
+        let manifests = stmt
             .query_map([], |r| {
                 Ok((
-                    r.get::<_, String>(0)?,
+                    r.get::<_, Vec<u8>>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, Vec<u8>>(2)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, Vec<u8>>(4)?,
                 ))
             })
             .map_err(to_io_err)?
@@ -261,7 +305,7 @@ impl ArkelStateMachine {
 
         Ok(ArkelStateMachineSnapshot {
             buckets,
-            objects,
+            manifests,
             last_applied_log: sm.last_applied_log.clone(),
             last_membership: sm.last_membership.clone(),
             snapshot_index: sm.snapshot_index,
@@ -284,21 +328,25 @@ impl ArkelStateMachine {
     }
 
     /// Read API: get a single object metadata record.
-    pub async fn get_object(
+    pub async fn read_manifest(
         &self,
         bucket: &str,
         key: &str,
-    ) -> Result<Option<ObjectMetadata>, io::Error> {
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, io::Error> {
         let sm = self.inner.lock().await;
         let mut stmt = sm
             .conn
-            .prepare_cached("SELECT metadata FROM objects WHERE bucket = ?1 AND key = ?2")
+            .prepare_cached(
+                "SELECT manifest, signature FROM manifests WHERE bucket = ?1 AND key = ?2",
+            )
             .map_err(to_io_err)?;
-        let blob: Option<Vec<u8>> = stmt
-            .query_row(params![bucket, key], |r| r.get(0))
+        let result = stmt
+            .query_row(params![bucket, key], |r| {
+                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })
             .optional()
             .map_err(to_io_err)?;
-        blob.map(|b| cbor_from_io(&b)).transpose()
+        Ok(result)
     }
 
     /// Read API: list object keys in a bucket.
@@ -306,7 +354,7 @@ impl ArkelStateMachine {
         let sm = self.inner.lock().await;
         let mut stmt = sm
             .conn
-            .prepare_cached("SELECT key FROM objects WHERE bucket = ?1 ORDER BY key")
+            .prepare_cached("SELECT key FROM manifests WHERE bucket = ?1 ORDER BY key")
             .map_err(to_io_err)?;
         let keys = stmt
             .query_map(params![bucket], |r| r.get::<_, String>(0))
@@ -316,22 +364,19 @@ impl ArkelStateMachine {
         Ok(keys)
     }
 
-    /// Read API: list object metadata in a bucket. Used for paginated S3-style listings.
-    pub async fn list_object_metadata(
-        &self,
-        bucket: &str,
-    ) -> Result<Vec<ObjectMetadata>, io::Error> {
+    pub async fn get_healthy_nodes(
+        self,
+        count: usize,
+    ) -> Result<Vec<(Vec<u8>, String)>, io::Error> {
         let sm = self.inner.lock().await;
-        let mut stmt = sm
-            .conn
-            .prepare_cached("SELECT metadata FROM objects WHERE bucket = ?1 ORDER BY key")
-            .map_err(to_io_err)?;
-        let blobs = stmt
-            .query_map(params![bucket], |r| r.get::<_, Vec<u8>>(0))
-            .map_err(to_io_err)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(to_io_err)?;
-        blobs.iter().map(|b| cbor_from_io(b)).collect()
+        let nodes: Vec<_> = sm
+            .node_registry
+            .iter()
+            .filter(|(_, ns)| ns.status == NodeStatus::Online)
+            .take(count)
+            .map(|(id, ns)| (id.clone(), ns.addr.clone()))
+            .collect();
+        Ok(nodes)
     }
 }
 
@@ -383,6 +428,7 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
         let mut pending: Vec<(ApplyResponder<ArkelRaftConfig>, IndexNodeResponse)> = Vec::new();
 
         {
+            let mut node_registry = std::mem::take(&mut sm.node_registry);
             let tx = sm.conn.transaction().map_err(to_io_err)?;
 
             for (entry, responder) in batch {
@@ -390,9 +436,12 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
 
                 let response = match &entry.payload {
                     EntryPayload::Blank => IndexNodeResponse::ok(),
-                    EntryPayload::Normal(cmd) => {
-                        StateMachineInner::apply_command(&tx, cmd.clone())?
-                    }
+                    EntryPayload::Normal(cmd) => StateMachineInner::apply_command(
+                        &tx,
+                        cmd.clone(),
+                        entry.index(),
+                        &mut node_registry,
+                    )?,
                     EntryPayload::Membership(mem) => {
                         last_membership = Some(StoredMembershipOf::<ArkelRaftConfig>::new(
                             Some(entry.log_id().clone()),
@@ -430,6 +479,7 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
             }
 
             tx.commit().map_err(to_io_err)?; // <-- single fsync for the whole batch
+            sm.node_registry = node_registry;
         } // tx dropped here, before any further .await
 
         if let Some(l) = last_log {
@@ -469,7 +519,7 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
         let tx = sm.conn.transaction().map_err(to_io_err)?;
 
         tx.execute("DELETE FROM buckets", []).map_err(to_io_err)?;
-        tx.execute("DELETE FROM objects", []).map_err(to_io_err)?;
+        tx.execute("DELETE FROM manifests", []).map_err(to_io_err)?;
 
         {
             let mut bucket_stmt = tx
@@ -482,13 +532,19 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
             }
         }
         {
-            let mut object_stmt = tx
-                .prepare_cached("INSERT INTO objects (bucket, key, metadata) VALUES (?1, ?2, ?3)")
+            let mut stmt = tx
+                .prepare_cached("INSERT INTO manifests (object_hash, bucket, key, manifest, signature, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
                 .map_err(to_io_err)?;
-            for (bucket, key, metadata) in &snap_data.objects {
-                object_stmt
-                    .execute(params![bucket, key, metadata])
-                    .map_err(to_io_err)?;
+            for (object_hash, bucket, key, manifest, signature) in &snap_data.manifests {
+                stmt.execute(rusqlite::params![
+                    object_hash,
+                    bucket,
+                    key,
+                    manifest,
+                    signature,
+                    0i64
+                ])
+                .map_err(to_io_err)?;
             }
         }
 
@@ -537,7 +593,7 @@ impl RaftSnapshotBuilder<ArkelRaftConfig> for ArkelStateMachine {
 
         let snap_data = StateMachineSnapshotData {
             buckets: snapshot.buckets,
-            objects: snapshot.objects,
+            manifests: snapshot.manifests,
         };
         let data = cbor_to_io(&snap_data)?;
 
