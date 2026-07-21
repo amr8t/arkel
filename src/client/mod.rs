@@ -1,4 +1,5 @@
 pub mod encrypt;
+pub mod manifest;
 
 // TODO: add these once encrypt.rs is implemented:
 // pub use encrypt::{decrypt_shard, derive_key, encrypt_shard};
