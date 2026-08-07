@@ -3,20 +3,20 @@ use iroh::SignatureError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct Manifest {
-    bucket: String,
-    key: String,
+pub struct Manifest {
+    pub bucket: String,
+    pub key: String,
     pub object_hash: [u8; 32],
-    original_size: u64,
-    k: u8,
-    m: u8,
-    shards: Vec<ShardPlacement>,
+    pub original_size: u64,
+    pub k: u8,
+    pub m: u8,
+    pub shards: Vec<ShardPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct ShardPlacement {
-    shard_index: u8,
-    node_id: iroh::PublicKey,
+pub struct ShardPlacement {
+    pub shard_index: u8,
+    pub node_id: iroh::PublicKey,
     pub blob_hash: [u8; 32],
 }
 

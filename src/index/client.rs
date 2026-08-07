@@ -50,3 +50,20 @@ pub async fn index_write(
     }
     bail!("index write failed after retries")
 }
+
+pub async fn index_read(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    route: &str,
+) -> Result<serde_json::Value> {
+    let leader = find_leader(http, index_addrs).await?;
+
+    let body: serde_json::Value = http
+        .get(format!("{leader}/{route}"))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    Ok(body)
+}

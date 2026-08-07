@@ -8,7 +8,7 @@ use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 
 pub mod api;
 pub mod client;
-pub mod gateway;
+pub mod dataplane;
 pub mod identity;
 pub mod index;
 pub mod storage;
@@ -192,7 +192,7 @@ fn build_index_endpoint(addr: SocketAddr) -> Result<iroh::endpoint::Builder> {
 fn build_storage_endpoint(addr: SocketAddr) -> Result<iroh::endpoint::Builder> {
     iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .alpns(vec![b"arkel-blobs".to_vec()])
-        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .relay_mode(iroh::endpoint::RelayMode::Default)
         .bind_addr(addr)
         .context("Failed to configure storage iroh bind address")
 }

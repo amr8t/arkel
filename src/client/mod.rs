@@ -1,11 +1,12 @@
 pub mod encrypt;
 pub mod manifest;
+pub mod sdk;
 
 // TODO: add these once encrypt.rs is implemented:
 // pub use encrypt::{decrypt_shard, derive_key, encrypt_shard};
 
 // TODO: uncomment once encrypt.rs AND gateway/erasure are available
-// use crate::gateway::ErasureConfig;
+// use crate::dataplane::ErasureConfig;
 //
 // pub struct PreparedUpload {
 //     pub object_hash: blake3::Hash,
