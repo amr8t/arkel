@@ -77,18 +77,18 @@ const SM_SCHEMA: &str = "
         created_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS manifests (
-        object_hash BLOB PRIMARY KEY,
         bucket TEXT NOT NULL,
         key TEXT NOT NULL,
+        object_hash BLOB NOT NULL,
         manifest BLOB NOT NULL,
         signature BLOB NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (bucket, key)
     );
     CREATE TABLE IF NOT EXISTS sm_meta (
         k TEXT PRIMARY KEY,
         v BLOB NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_manifests_bucket_key ON manifests(bucket, key);
 ";
 
 impl StateMachineInner {
@@ -167,23 +167,6 @@ impl StateMachineInner {
                 )
                 .map_err(to_io_err)?;
                 IndexNodeResponse::ok()
-            }
-            IndexNodeRequest::GetManifest { object_hash } => {
-                let mut stmt = tx
-                    .prepare_cached(
-                        "SELECT manifest, signature FROM manifests WHERE object_hash = ?1",
-                    )
-                    .map_err(to_io_err)?;
-                let result = stmt
-                    .query_row(rusqlite::params![object_hash], |row| {
-                        Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-                    })
-                    .optional()
-                    .map_err(to_io_err)?;
-                match result {
-                    Some(_) => IndexNodeResponse::ok(),
-                    None => IndexNodeResponse::err("Manifest not found"),
-                }
             }
             IndexNodeRequest::CreateBucket { name, created_at } => {
                 tx.execute(
