@@ -20,7 +20,7 @@ use crate::client::manifest::{
     Manifest, ShardPlacement, bytes_to_hash, deserialize_manifest, etag_from_hash,
     serialize_manifest, sign_manifest, verify_manifest,
 };
-use crate::index::client::{index_read, index_write};
+use crate::index::client::{index_put, index_read};
 use crate::storage::blob::{get_blob, put_blob};
 
 pub struct PreparedUpload {
@@ -140,7 +140,7 @@ pub async fn put(
     };
     let manifest_bytes = serialize_manifest(&manifest)?;
     let signature = sign_manifest(&manifest_bytes, &cfg.secret_key)?;
-    index_write(
+    index_put(
         &cfg.http,
         &cfg.index_addrs,
         &format!("manifest/{bucket}/{key}"),
@@ -157,15 +157,23 @@ pub async fn put(
 /// Download an object: read the manifest, verify the signature, fetch k shards
 /// over iroh-blobs QUIC, and reconstruct (decrypt + EC decode + BLAKE3 verify).
 ///
-/// Placement comes from the manifest itself — no target list needed. The
-/// downloader dials storage nodes by `node_id` via the endpoint (relay-backed).
+/// Placement comes from the manifest itself. The downloader dials storage nodes
+/// by `node_id`, so `targets` is used to teach the endpoint the peer addresses
+/// first (no discovery is configured).
 pub async fn get(
     cfg: &DataPlaneConfig,
+    targets: &[StorageTarget],
     endpoint: &iroh::Endpoint,
     store: &iroh_blobs::api::Store,
     bucket: &str,
     key: &str,
 ) -> Result<Vec<u8>> {
+    // Teach the endpoint the storage nodes' addresses (no DHT/discovery).
+    for t in targets {
+        let ea = iroh::EndpointAddr::from_parts(t.node_id, [iroh::TransportAddr::Ip(t.addr)]);
+        endpoint.connect(ea, iroh_blobs::ALPN).await?;
+    }
+
     let body =
         index_read(&cfg.http, &cfg.index_addrs, &format!("manifest/{bucket}/{key}")).await?;
     let manifest_bytes: Vec<u8> = serde_json::from_value(body["manifest_bytes"].clone())?;

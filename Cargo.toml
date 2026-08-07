@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 axum = "0.7"
 anyhow = "1.0.102"
-iroh = "1.0.0-rc.1"
-iroh-blobs = "0.102.0"
+iroh = "1.0.3"
+iroh-blobs = "0.103.0"
 openraft = { version = "0.10.0-alpha.21", features = ["serde", "type-alias"] }
 openraft-rt = "0.10.0-alpha.21"
 serde = "1.0.228"

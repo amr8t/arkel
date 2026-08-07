@@ -39,7 +39,12 @@ impl Client {
         dataplane::put(&self.cfg, targets, &self.endpoint, &self.store, bucket, key, data).await
     }
 
-    pub async fn get_object(&self, bucket: &str, key: &str) -> Result<Vec<u8>> {
-        dataplane::get(&self.cfg, &self.endpoint, &self.store, bucket, key).await
+    pub async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        targets: &[StorageTarget],
+    ) -> Result<Vec<u8>> {
+        dataplane::get(&self.cfg, targets, &self.endpoint, &self.store, bucket, key).await
     }
 }

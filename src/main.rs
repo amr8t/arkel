@@ -1,8 +1,18 @@
 use anyhow::{Context, Result};
-use arkel::{Arkel, BootstrapConfig, NodeMode};
+use arkel::{
+    Arkel, BootstrapConfig, NodeMode,
+    client::sdk::{Client as ArkelClient, ClientConfig},
+    dataplane::{ErasureConfig, StorageTarget},
+    identity::NodeIdentity,
+};
 use clap::{Parser, Subcommand};
+use iroh::PublicKey;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+const DEFAULT_INDEX_ADDRS: &str =
+    "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -39,17 +49,123 @@ enum Commands {
 
         /// Index node HTTP URLs to register against (comma-separated; the
         /// registrar discovers the current Raft leader among them)
-        #[arg(
-            long,
-            value_delimiter = ',',
-            default_value = "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003"
-        )]
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
         index_addrs: Vec<String>,
 
         /// Address the iroh QUIC endpoint binds to
         #[arg(long, default_value = "127.0.0.1:9001")]
         addr: SocketAddr,
     },
+    /// Upload/download objects as an iroh-native client
+    Client {
+        #[command(subcommand)]
+        cmd: ClientCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ClientCmd {
+    /// Upload a file (EC + encrypt locally, shards to storage nodes, manifest via Raft)
+    Put {
+        /// Path to the file to upload
+        file: PathBuf,
+        #[arg(long, default_value = "default")]
+        bucket: String,
+        /// Object key; defaults to the file name
+        #[arg(long)]
+        key: Option<String>,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+        /// Storage nodes to distribute shards to, as pubkey@ip:port (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        storage_addrs: Vec<String>,
+    },
+    /// Download an object and write it to a file (or stdout)
+    Get {
+        bucket: String,
+        key: String,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+        /// Storage nodes that may hold shards, as pubkey@ip:port (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        storage_addrs: Vec<String>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+}
+
+fn parse_targets(addrs: &[String]) -> Result<Vec<StorageTarget>> {
+    addrs.iter()
+        .map(|s| {
+            let (node_id, addr) = s
+                .split_once('@')
+                .context("storage-addrs must be <pubkey>@<ip:port>")?;
+            Ok(StorageTarget {
+                node_id: node_id.parse::<PublicKey>()?,
+                addr: addr.parse::<SocketAddr>()?,
+            })
+        })
+        .collect()
+}
+
+async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) -> Result<()> {
+    let store_dir = base_dir.join("blobs");
+
+    match cmd {
+        ClientCmd::Put {
+            file,
+            bucket,
+            key,
+            index_addrs,
+            storage_addrs,
+        } => {
+            let key = key.unwrap_or_else(|| {
+                file.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "object".to_string())
+            });
+            let cfg = ClientConfig {
+                index_addrs,
+                secret_key: identity.secret_key().clone(),
+                ec_config: ErasureConfig { k: 4, m: 2 },
+                http: reqwest::Client::new(),
+            };
+            let data = tokio::fs::read(&file).await?;
+            let client = ArkelClient::new(cfg, store_dir).await?;
+            let etag = client
+                .put_object(&bucket, &key, &data, &parse_targets(&storage_addrs)?)
+                .await?;
+            println!("{etag}");
+            // Gracefully close so in-flight shard pushes finish before we exit.
+            client.endpoint.close().await;
+        }
+        ClientCmd::Get {
+            bucket,
+            key,
+            index_addrs,
+            storage_addrs,
+            output,
+        } => {
+            let cfg = ClientConfig {
+                index_addrs,
+                secret_key: identity.secret_key().clone(),
+                ec_config: ErasureConfig { k: 4, m: 2 },
+                http: reqwest::Client::new(),
+            };
+            let client = ArkelClient::new(cfg, store_dir).await?;
+            let data = client
+                .get_object(&bucket, &key, &parse_targets(&storage_addrs)?)
+                .await?;
+            match output {
+                Some(path) => tokio::fs::write(path, data).await?,
+                None => std::io::stdout().write_all(&data)?,
+            }
+            client.endpoint.close().await;
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -62,6 +178,7 @@ async fn main() -> Result<()> {
         let suffix = match &cli.command {
             Commands::Index { http_addr, .. } => format!("index_{}", http_addr.port()),
             Commands::Storage { .. } => "storage".to_string(),
+            Commands::Client { .. } => "client".to_string(),
         };
         PathBuf::from(format!("./.arkel_{suffix}_data"))
     });
@@ -70,6 +187,7 @@ async fn main() -> Result<()> {
     let node_id = arkel.identity.raft_node_id();
 
     let mode = match cli.command {
+        Commands::Client { cmd } => return run_client(base_dir, &arkel.identity, cmd).await,
         Commands::Index {
             http_addr,
             peer_addresses,

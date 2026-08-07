@@ -26,7 +26,7 @@ pub async fn put_blob(
         .await
         .context("Failed to connect to storage node")?;
 
-    let request = iroh_blobs::protocol::GetRequest::builder().build(hash);
+    let request = iroh_blobs::protocol::GetRequest::blob(hash);
     store
         .remote()
         .execute_push(conn, request.into())
