@@ -36,6 +36,19 @@ enum Commands {
         /// Optional private Iroh relay architecture URL override
         #[arg(long)]
         private_relay_url: Option<String>,
+
+        /// Index node HTTP URLs to register against (comma-separated; the
+        /// registrar discovers the current Raft leader among them)
+        #[arg(
+            long,
+            value_delimiter = ',',
+            default_value = "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003"
+        )]
+        index_addrs: Vec<String>,
+
+        /// Address the iroh QUIC endpoint binds to
+        #[arg(long, default_value = "127.0.0.1:9001")]
+        addr: SocketAddr,
     },
 }
 
@@ -85,7 +98,11 @@ async fn main() -> Result<()> {
                 http_addr,
             }
         }
-        Commands::Storage { private_relay_url } => {
+        Commands::Storage {
+            private_relay_url,
+            index_addrs,
+            addr,
+        } => {
             let blob_dir = base_dir.join("blobs");
             let db = iroh_blobs::store::fs::FsStore::load(&blob_dir).await?;
             let blobs = iroh_blobs::BlobsProtocol::new(&db, None);
@@ -99,6 +116,8 @@ async fn main() -> Result<()> {
                 base_dir,
                 blobs,
                 private_relay_url,
+                index_addrs,
+                addr,
             }
         }
     };

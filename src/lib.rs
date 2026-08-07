@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::storage::{DiskStore, ShardStore};
+use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 
 pub mod api;
 pub mod client;
@@ -34,6 +34,8 @@ pub enum NodeMode {
         base_dir: PathBuf,
         blobs: iroh_blobs::BlobsProtocol,
         private_relay_url: Option<String>,
+        index_addrs: Vec<String>,
+        addr: SocketAddr,
     },
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -129,12 +131,14 @@ impl Arkel {
             }
 
             ArkelNodeType::Storage => {
-                let (base_dir, blobs, ..) = match mode {
+                let (base_dir, blobs, _private_relay_url, index_addrs, addr) = match mode {
                     NodeMode::Storage {
                         base_dir,
                         blobs,
                         private_relay_url,
-                    } => (base_dir, blobs, private_relay_url),
+                        index_addrs,
+                        addr,
+                    } => (base_dir, blobs, private_relay_url, index_addrs, addr),
                     _ => unreachable!(),
                 };
 
@@ -142,7 +146,7 @@ impl Arkel {
                 tokio::fs::create_dir_all(&shard_dir).await?;
                 let disk_store = Arc::new(DiskStore::new(shard_dir));
 
-                let endpoint = build_storage_endpoint()?
+                let endpoint = build_storage_endpoint(addr)?
                     .secret_key(self.identity.secret_key().clone())
                     .bind()
                     .await
@@ -154,6 +158,14 @@ impl Arkel {
                     endpoint.id(),
                     disk_store.data_dir()
                 );
+
+                let registrar = NodeRegistrar::new(
+                    &self.identity,
+                    1_000_000_000_000, // 1 TB default capacity
+                    addr,
+                    index_addrs,
+                );
+                tokio::spawn(registrar.run());
 
                 let router = iroh::protocol::Router::builder(endpoint)
                     .accept(iroh_blobs::ALPN, blobs)
@@ -177,11 +189,12 @@ fn build_index_endpoint(addr: SocketAddr) -> Result<iroh::endpoint::Builder> {
 }
 
 /// Storage node: builds an endpoint with N0 defaults.
-fn build_storage_endpoint() -> Result<iroh::endpoint::Builder> {
-    Ok(iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+fn build_storage_endpoint(addr: SocketAddr) -> Result<iroh::endpoint::Builder> {
+    iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .alpns(vec![b"arkel-blobs".to_vec()])
-        .relay_mode(iroh::endpoint::RelayMode::Disabled))
-    // No .context() here either.
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(addr)
+        .context("Failed to configure storage iroh bind address")
 }
 async fn run_index_node(
     arkel: Arkel,

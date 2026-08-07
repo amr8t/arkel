@@ -1,3 +1,4 @@
+pub mod client;
 pub mod raft;
 pub mod state;
 pub mod types;

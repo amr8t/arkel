@@ -1,12 +1,10 @@
-use crate::index::{
-    ArkelRaftConfig, ArkelStateMachine, IndexNodeRequest, IndexNodeResponse,
-};
+use crate::index::{ArkelRaftConfig, ArkelStateMachine, IndexNodeRequest, IndexNodeResponse};
 use axum::{
     Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use openraft::raft::ClientWriteResponse;
 use serde::{Deserialize, Serialize};
@@ -136,7 +134,11 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_buckets))
         .route("/:bucket", put(create_bucket).get(list_objects))
-        .route("/manifest/:bucket/:key", put(commit_manifest).get(read_manifest))
+        .route(
+            "/manifest/:bucket/:key",
+            put(commit_manifest).get(read_manifest),
+        )
+        .route("/register", post(register_node))
 }
 
 pub async fn serve_index(listener: tokio::net::TcpListener, app: Router) {
@@ -163,6 +165,24 @@ async fn create_bucket(
     let cmd = IndexNodeRequest::CreateBucket {
         name: bucket,
         created_at: now,
+    };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
+    }
+}
+
+async fn register_node(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<RegisterNodePayload>,
+) -> impl IntoResponse {
+    let cmd = IndexNodeRequest::RegisterNode {
+        node_id: payload.node_id,
+        capacity_bytes: payload.capacity_bytes,
+        addr: payload.addr,
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -228,17 +248,23 @@ async fn commit_manifest(
     }
 }
 
+#[derive(Deserialize)]
+pub struct RegisterNodePayload {
+    pub node_id: Vec<u8>,
+    pub capacity_bytes: u64,
+    pub addr: String,
+}
+
 async fn read_manifest(
     State(state): State<Arc<AppState>>,
     Path((bucket, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match state.state_machine.read_manifest(&bucket, &key).await {
-        Ok(Some((manifest_bytes, signature))) => {
-            Json(serde_json::json!({
-                "manifest_bytes": manifest_bytes,
-                "signature": signature,
-            })).into_response()
-        }
+        Ok(Some((manifest_bytes, signature))) => Json(serde_json::json!({
+            "manifest_bytes": manifest_bytes,
+            "signature": signature,
+        }))
+        .into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

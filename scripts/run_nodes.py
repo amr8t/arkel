@@ -35,6 +35,20 @@ NODE_ADDRS = [
     "127.0.0.1:8003",
 ]
 
+STORAGE_ADDRS = [
+    "127.0.0.1:9001",
+    "127.0.0.1:9002",
+    "127.0.0.1:9003",
+]
+
+# Index node URLs storage nodes register against (the registrar discovers the
+# current Raft leader among these).
+INDEX_ADDRS = [
+    "http://127.0.0.1:8001",
+    "http://127.0.0.1:8002",
+    "http://127.0.0.1:8003",
+]
+
 # Number of synthetic buckets to spread perf-test writes across.
 # Mostly cosmetic: SQLite serializes writes anyway, but sharding avoids
 # concentrating the tiny bucket-existence check on a single row.
@@ -131,6 +145,18 @@ class Node:
         return f"Node(port={self.port})"
 
 
+class StorageNode:
+    def __init__(self, port: int, addr: str) -> None:
+        self.port = port
+        self.addr = addr
+        self.process: subprocess.Popen | None = None
+        self.log_path = LOG_DIR / f"storage{port - 9000}.log"
+        self.data_dir = DATA_DIR / f".arkel_storage_{port}_data"
+
+    def __repr__(self) -> str:
+        return f"StorageNode(port={self.port})"
+
+
 def env() -> dict[str, str]:
     e = os.environ.copy()
     e.setdefault("RUST_LOG", "info")
@@ -155,6 +181,14 @@ def kill_arkel_by_addr(addrs: Iterable[str]) -> None:
     for addr in addrs:
         subprocess.run(
             ["pkill", "-f", f"arkel index --http-addr {addr}"],
+            capture_output=True,
+        )
+
+
+def kill_arkel_storage_by_addr(addrs: Iterable[str]) -> None:
+    for addr in addrs:
+        subprocess.run(
+            ["pkill", "-f", f"arkel storage --addr {addr}"],
             capture_output=True,
         )
 
@@ -772,6 +806,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
     if args.all:
         print("[kill] Stopping all nodes...")
         stop_cluster(nodes)
+        kill_arkel_storage_by_addr(STORAGE_ADDRS)
     elif args.port:
         print(f"[kill] Stopping node on port {args.port}...")
         node = next((n for n in nodes if n.port == args.port), None)
@@ -836,14 +871,55 @@ def cmd_clean(args: argparse.Namespace) -> int:
     nodes = [Node(port, addr) for port, addr in zip((8001, 8002, 8003), NODE_ADDRS)]
     print("[clean] Stopping any running nodes...")
     stop_cluster(nodes)
+    kill_arkel_storage_by_addr(STORAGE_ADDRS)
     print("[clean] Removing data dirs and logs...")
     for node in nodes:
         if node.data_dir.exists():
             shutil.rmtree(node.data_dir, ignore_errors=True)
             print(f"[clean] Removed {node.data_dir}")
+    for port, addr in zip((9001, 9002, 9003), STORAGE_ADDRS):
+        data_dir = DATA_DIR / f".arkel_storage_{port}_data"
+        if data_dir.exists():
+            shutil.rmtree(data_dir, ignore_errors=True)
+            print(f"[clean] Removed {data_dir}")
     if LOG_DIR.exists():
         shutil.rmtree(LOG_DIR, ignore_errors=True)
         print(f"[clean] Removed {LOG_DIR}")
+    return 0
+
+
+def cmd_start_storage(args: argparse.Namespace) -> int:
+    print("== Arkel Storage Node Manager: start-storage ==")
+    binary = build_binary()
+    index_addrs = ",".join(args.index_addrs) if args.index_addrs else ",".join(INDEX_ADDRS)
+    storage_nodes = [StorageNode(port, addr) for port, addr in zip((9001, 9002, 9003), STORAGE_ADDRS)]
+
+    kill_arkel_storage_by_addr(n.addr for n in storage_nodes)
+    time.sleep(0.5)
+
+    for node in storage_nodes:
+        node.log_path.unlink(missing_ok=True)
+        cmd = [
+            str(binary),
+            "storage",
+            "--index-addrs",
+            index_addrs,
+            "--addr",
+            node.addr,
+            "--data-dir",
+            str(node.data_dir),
+        ]
+        with open(node.log_path, "w") as logfile:
+            node.process = subprocess.Popen(
+                cmd,
+                stdout=logfile,
+                stderr=subprocess.STDOUT,
+                env=env(),
+            )
+        time.sleep(0.3)
+
+    print(f"[start-storage] Storage nodes running in background (registering with {index_addrs}).")
+    print(f"               Logs: {LOG_DIR}/storage{{1,2,3}}.log")
     return 0
 
 
@@ -851,7 +927,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
 
     # All subcommands. If the first arg isn't a known subcommand, default to 'run'.
-    subcommands = {"run", "start", "kill", "wipe", "clean"}
+    subcommands = {"run", "start", "kill", "wipe", "clean", "start-storage"}
     if argv and argv[0] in subcommands:
         command = argv[0]
         rest = argv[1:]
@@ -959,6 +1035,20 @@ def main(argv: list[str] | None = None) -> int:
     # clean
     subparsers.add_parser("clean", help="Stop all nodes and remove all data + logs")
 
+    # start-storage
+    storage_parser = subparsers.add_parser(
+        "start-storage",
+        help="Start 3 storage nodes in the background",
+    )
+    storage_parser.add_argument(
+        "--index-addrs",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Index node HTTP URLs (space-separated) storage nodes register against "
+             "(default: all three local index nodes)",
+    )
+
     args = parser.parse_args([command, *rest] if command else rest)
 
     if args.command == "run":
@@ -971,6 +1061,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_wipe(args)
     elif args.command == "clean":
         return cmd_clean(args)
+    elif args.command == "start-storage":
+        return cmd_start_storage(args)
     else:
         parser.print_help()
         return 1
