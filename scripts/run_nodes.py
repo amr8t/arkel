@@ -927,7 +927,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
 
     # All subcommands. If the first arg isn't a known subcommand, default to 'run'.
-    subcommands = {"run", "start", "kill", "wipe", "clean", "start-storage"}
+    subcommands = {"run", "start", "kill", "wipe", "clean", "start-storage", "smoke"}
     if argv and argv[0] in subcommands:
         command = argv[0]
         rest = argv[1:]
@@ -1049,6 +1049,22 @@ def main(argv: list[str] | None = None) -> int:
              "(default: all three local index nodes)",
     )
 
+    # smoke
+    smoke_parser = subparsers.add_parser(
+        "smoke",
+        help="Run a smoke scenario (scripts/smoke/<name>.py)",
+    )
+    smoke_parser.add_argument(
+        "scenario",
+        help="Scenario name, e.g. 'basic' for the data-plane roundtrip",
+    )
+    smoke_parser.add_argument(
+        "--mb",
+        type=float,
+        default=2.0,
+        help="Data size in MB for size-parameterized scenarios (default: 2)",
+    )
+
     args = parser.parse_args([command, *rest] if command else rest)
 
     if args.command == "run":
@@ -1063,6 +1079,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_clean(args)
     elif args.command == "start-storage":
         return cmd_start_storage(args)
+    elif args.command == "smoke":
+        import importlib
+        mod = importlib.import_module(f"smoke.{args.scenario}")
+        return mod.run(args)
     else:
         parser.print_help()
         return 1
