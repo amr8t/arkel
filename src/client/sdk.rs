@@ -11,6 +11,7 @@ pub struct Client {
     pub cfg: DataPlaneConfig,
     pub endpoint: iroh::Endpoint,
     pub store: iroh_blobs::api::Store,
+    pub router: iroh::protocol::Router,
 }
 
 impl Client {
@@ -22,10 +23,16 @@ impl Client {
             .await?;
         let store: iroh_blobs::api::Store =
             iroh_blobs::store::fs::FsStore::load(&store_dir).await?.into();
+        // Serve blobs locally so storage nodes can pull shards from us (pull-based put).
+        let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
+        let router = iroh::protocol::Router::builder(endpoint.clone())
+            .accept(iroh_blobs::ALPN, blobs)
+            .spawn();
         Ok(Self {
             cfg,
             endpoint,
             store,
+            router,
         })
     }
 

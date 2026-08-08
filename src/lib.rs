@@ -33,6 +33,7 @@ pub enum NodeMode {
     Storage {
         base_dir: PathBuf,
         blobs: iroh_blobs::BlobsProtocol,
+        store: iroh_blobs::api::Store,
         private_relay_url: Option<String>,
         index_addrs: Vec<String>,
         addr: SocketAddr,
@@ -131,14 +132,15 @@ impl Arkel {
             }
 
             ArkelNodeType::Storage => {
-                let (base_dir, blobs, _private_relay_url, index_addrs, addr) = match mode {
+                let (base_dir, blobs, store, _private_relay_url, index_addrs, addr) = match mode {
                     NodeMode::Storage {
                         base_dir,
                         blobs,
+                        store,
                         private_relay_url,
                         index_addrs,
                         addr,
-                    } => (base_dir, blobs, private_relay_url, index_addrs, addr),
+                    } => (base_dir, blobs, store, private_relay_url, index_addrs, addr),
                     _ => unreachable!(),
                 };
 
@@ -167,8 +169,12 @@ impl Arkel {
                 );
                 tokio::spawn(registrar.run());
 
-                let router = iroh::protocol::Router::builder(endpoint)
+                let router = iroh::protocol::Router::builder(endpoint.clone())
                     .accept(iroh_blobs::ALPN, blobs)
+                    .accept(
+                        crate::storage::PULL_ALPN,
+                        crate::storage::PullHandler::new(&store, &endpoint),
+                    )
                     .spawn();
 
                 tokio::signal::ctrl_c().await?;

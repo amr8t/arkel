@@ -21,7 +21,7 @@ use crate::client::manifest::{
     serialize_manifest, sign_manifest, verify_manifest,
 };
 use crate::index::client::{index_put, index_read};
-use crate::storage::blob::{get_blob, put_blob};
+use crate::storage::blob::get_blob;
 
 pub struct PreparedUpload {
     pub object_hash: blake3::Hash,
@@ -102,8 +102,9 @@ pub struct DataPlaneConfig {
     pub http: reqwest::Client,
 }
 
-/// Upload an object: EC + encrypt, distribute shards over iroh-blobs QUIC,
-/// build + sign a Manifest, and commit it via Raft. Returns the ETag.
+/// Upload an object: EC + encrypt, host the shards locally and have storage
+/// nodes pull them (iroh-blobs push is unreliable), build + sign a Manifest, and
+/// commit it via Raft. Returns the ETag.
 pub async fn put(
     cfg: &DataPlaneConfig,
     targets: &[StorageTarget],
@@ -118,16 +119,36 @@ pub async fn put(
     }
     let prepared = prepare_upload(data, cfg.ec_config, &cfg.secret_key.to_bytes())?;
 
-    let mut shards = Vec::with_capacity(prepared.encrypted_shards.len());
-    for (i, shard) in prepared.encrypted_shards.iter().enumerate() {
-        let target = &targets[i % targets.len()];
-        let blob_hash = put_blob(store, endpoint, shard, target.node_id, target.addr).await?;
-        shards.push(ShardPlacement {
-            shard_index: i as u8,
-            node_id: target.node_id,
-            blob_hash: *blob_hash.as_bytes(),
-        });
+    // 1. Host each encrypted shard locally (as a provider) and keep the tags
+    //    alive until the storage nodes have pulled them.
+    let mut shard_hashes = Vec::with_capacity(prepared.encrypted_shards.len());
+    let mut temp_tags = Vec::new();
+    for shard in &prepared.encrypted_shards {
+        let tag = store.blobs().add_bytes(shard.to_vec()).temp_tag().await?;
+        shard_hashes.push(tag.hash());
+        temp_tags.push(tag);
     }
+
+    // 2. Tell each storage node to pull its assigned shard(s) from us, awaiting
+    //    an ack per shard.
+    for (i, blob_hash) in shard_hashes.iter().enumerate() {
+        let target = &targets[i % targets.len()];
+        pull_shard(endpoint, target, *blob_hash).await?;
+    }
+
+    // 3. Build the manifest exactly as before (placement = round-robin).
+    let shards: Vec<ShardPlacement> = shard_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let target = &targets[i % targets.len()];
+            ShardPlacement {
+                shard_index: i as u8,
+                node_id: target.node_id,
+                blob_hash: *h.as_bytes(),
+            }
+        })
+        .collect();
 
     let manifest = Manifest {
         bucket: bucket.into(),
@@ -152,6 +173,26 @@ pub async fn put(
     )
     .await?;
     Ok(etag_from_hash(prepared.object_hash.as_bytes()))
+}
+
+/// Ask a storage node to download a shard from us over the `arkel-pull` protocol.
+async fn pull_shard(
+    endpoint: &iroh::Endpoint,
+    target: &StorageTarget,
+    blob_hash: iroh_blobs::Hash,
+) -> Result<()> {
+    use crate::storage::PULL_ALPN;
+
+    let ea = iroh::EndpointAddr::from_parts(target.node_id, [iroh::TransportAddr::Ip(target.addr)]);
+    let conn = endpoint.connect(ea, PULL_ALPN).await?;
+    let (mut send, mut recv) = conn.open_bi().await?;
+    send.write_all(blob_hash.as_bytes()).await?;
+    let mut ack = [0u8; 1];
+    recv.read_exact(&mut ack).await?;
+    if ack[0] != 0 {
+        bail!("storage node rejected shard pull");
+    }
+    Ok(())
 }
 
 /// Download an object: read the manifest, verify the signature, fetch k shards

@@ -222,8 +222,9 @@ async fn main() -> Result<()> {
             addr,
         } => {
             let blob_dir = base_dir.join("blobs");
-            let db = iroh_blobs::store::fs::FsStore::load(&blob_dir).await?;
-            let blobs = iroh_blobs::BlobsProtocol::new(&db, None);
+            let store: iroh_blobs::api::Store =
+                iroh_blobs::store::fs::FsStore::load(&blob_dir).await?.into();
+            let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
 
             let shard_dir = base_dir.join("shards");
             tokio::fs::create_dir_all(&shard_dir)
@@ -233,6 +234,7 @@ async fn main() -> Result<()> {
             NodeMode::Storage {
                 base_dir,
                 blobs,
+                store,
                 private_relay_url,
                 index_addrs,
                 addr,
