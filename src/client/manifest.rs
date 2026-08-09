@@ -8,6 +8,7 @@ pub struct Manifest {
     pub key: String,
     pub object_hash: [u8; 32],
     pub original_size: u64,
+    pub ciphertext_size: u64,
     pub k: u8,
     pub m: u8,
     pub shards: Vec<ShardPlacement>,
@@ -72,6 +73,7 @@ mod tests {
             key: "test-key".to_string(),
             object_hash: *blake3::hash(b"hello").as_bytes(),
             original_size: 1024,
+            ciphertext_size: 1064,
             k: 4,
             m: 2,
             shards: vec![

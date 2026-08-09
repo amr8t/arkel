@@ -25,10 +25,13 @@ use crate::storage::blob::get_blob;
 
 pub struct PreparedUpload {
     pub object_hash: blake3::Hash,
-    pub encrypted_shards: Vec<Vec<u8>>,
+    pub ciphertext_size: usize,
+    pub shards: Vec<Vec<u8>>,
     pub shard_hashes: Vec<blake3::Hash>,
     pub erasure_config: ErasureConfig,
 }
+
+
 pub fn prepare_upload(
     data: &[u8],
     ec_config: ErasureConfig,
@@ -37,52 +40,40 @@ pub fn prepare_upload(
     let object_hash = blake3::hash(data);
     let derived_key = derive_key(master_key, &object_hash);
 
-    let plain_shards = encode(data, &ec_config)?;
-    let mut encrypted_shards = Vec::with_capacity(plain_shards.len());
-    let mut shard_hashes = Vec::with_capacity(plain_shards.len());
-
-    for shard in plain_shards {
-        let encrypted = encrypt_shard(&shard, &derived_key);
-        let hash = blake3::hash(&encrypted);
-        encrypted_shards.push(encrypted);
-        shard_hashes.push(hash);
-    }
+    let ciphertext = encrypt_shard(data, &derived_key);
+    let ciphertext_size = ciphertext.len();
+    let shards = encode(&ciphertext, &ec_config)?;
+    let shard_hashes: Vec<_> = shards.iter().map(|s| blake3::hash(s)).collect();
 
     Ok(PreparedUpload {
         object_hash,
-        encrypted_shards,
+        ciphertext_size,
+        shards,
         shard_hashes,
         erasure_config: ec_config,
     })
 }
 
 pub fn reconstruct_object(
-    encrypted_shards: &[Option<&[u8]>],
+    shards: &[Option<&[u8]>],
     ec_config: ErasureConfig,
     master_key: &[u8; 32],
     expected_object_hash: &Hash,
-    original_len: usize,
+    ciphertext_len: usize,
 ) -> Result<Vec<u8>> {
     let derived_key = derive_key(master_key, expected_object_hash);
 
-    let mut decrypted = Vec::with_capacity(encrypted_shards.len());
-    for shard in encrypted_shards {
-        if let Some(enc) = shard {
-            let plain = decrypt_shard(enc, &derived_key)?;
-            decrypted.push(Some(plain));
-        } else {
-            decrypted.push(None);
-        }
-    }
-    let refs: Vec<Option<&[u8]>> = decrypted.iter().map(|opt| opt.as_deref()).collect();
-    let recovered = decode(&refs, &ec_config, original_len)?;
+    // Shards are ciphertext slices; decode back to the full ciphertext, then
+    // decrypt once. Trim to the manifest-recorded ciphertext size.
+    let recovered = decode(shards, &ec_config, ciphertext_len)?;
+    let plaintext = decrypt_shard(&recovered, &derived_key)?;
 
-    let computed = blake3::hash(&recovered);
+    let computed = blake3::hash(&plaintext);
     if computed != *expected_object_hash {
         bail!("integrity check failed: BLAKE3 mismatch");
     }
 
-    Ok(recovered)
+    Ok(plaintext)
 }
 
 /// A storage node the client can push/pull shards to/from.
@@ -121,9 +112,9 @@ pub async fn put(
 
     // 1. Host each encrypted shard locally (as a provider) and keep the tags
     //    alive until the storage nodes have pulled them.
-    let mut shard_hashes = Vec::with_capacity(prepared.encrypted_shards.len());
+    let mut shard_hashes = Vec::with_capacity(prepared.shards.len());
     let mut temp_tags = Vec::new();
-    for shard in &prepared.encrypted_shards {
+    for shard in &prepared.shards {
         let tag = store.blobs().add_bytes(shard.to_vec()).temp_tag().await?;
         shard_hashes.push(tag.hash());
         temp_tags.push(tag);
@@ -155,6 +146,7 @@ pub async fn put(
         key: key.into(),
         object_hash: *prepared.object_hash.as_bytes(),
         original_size: data.len() as u64,
+        ciphertext_size: prepared.ciphertext_size as u64,
         k: prepared.erasure_config.k as u8,
         m: prepared.erasure_config.m as u8,
         shards,
@@ -248,7 +240,7 @@ pub async fn get(
         cfg.ec_config,
         &master,
         &bytes_to_hash(manifest.object_hash),
-        manifest.original_size as usize,
+        manifest.ciphertext_size as usize,
     )
 }
 
@@ -265,16 +257,21 @@ mod tests {
         let prepared = prepare_upload(data, ec_config, &master)?;
 
         // Simulate losing shards 2 and 5 (indices 2 and 5).
-        let mut available = vec![None; prepared.encrypted_shards.len()];
-        for (i, shard) in prepared.encrypted_shards.iter().enumerate() {
+        let mut available = vec![None; prepared.shards.len()];
+        for (i, shard) in prepared.shards.iter().enumerate() {
             if i != 2 && i != 5 {
                 available[i] = Some(shard.as_slice());
             }
         }
 
         let object_hash = blake3::hash(data);
-        let recovered =
-            reconstruct_object(&available, ec_config, &master, &object_hash, data.len())?;
+        let recovered = reconstruct_object(
+            &available,
+            ec_config,
+            &master,
+            &object_hash,
+            prepared.ciphertext_size,
+        )?;
         assert_eq!(recovered, data);
         Ok(())
     }
