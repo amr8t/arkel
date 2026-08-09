@@ -114,7 +114,8 @@ fn parse_targets(addrs: &[String]) -> Result<Vec<StorageTarget>> {
 async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) -> Result<()> {
     let store_dir = base_dir.join("blobs");
 
-    match cmd {
+    let client;
+    let result: Result<()> = match cmd {
         ClientCmd::Put {
             file,
             bucket,
@@ -133,14 +134,16 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
                 ec_config: ErasureConfig { k: 4, m: 2 },
                 http: reqwest::Client::new(),
             };
-            let data = tokio::fs::read(&file).await?;
-            let client = ArkelClient::new(cfg, store_dir).await?;
-            let etag = client
-                .put_object(&bucket, &key, &data, &parse_targets(&storage_addrs)?)
-                .await?;
-            println!("{etag}");
-            // Gracefully close so in-flight shard pushes finish before we exit.
-            client.endpoint.close().await;
+            client = ArkelClient::new(cfg, store_dir).await?;
+            (async {
+                let data = tokio::fs::read(&file).await?;
+                let etag = client
+                    .put_object(&bucket, &key, &data, &parse_targets(&storage_addrs)?)
+                    .await?;
+                println!("{etag}");
+                Ok(())
+            })
+            .await
         }
         ClientCmd::Get {
             bucket,
@@ -155,18 +158,25 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
                 ec_config: ErasureConfig { k: 4, m: 2 },
                 http: reqwest::Client::new(),
             };
-            let client = ArkelClient::new(cfg, store_dir).await?;
-            let data = client
-                .get_object(&bucket, &key, &parse_targets(&storage_addrs)?)
-                .await?;
-            match output {
-                Some(path) => tokio::fs::write(path, data).await?,
-                None => std::io::stdout().write_all(&data)?,
-            }
-            client.endpoint.close().await;
+            client = ArkelClient::new(cfg, store_dir).await?;
+            (async {
+                let data = client
+                    .get_object(&bucket, &key, &parse_targets(&storage_addrs)?)
+                    .await?;
+                match output {
+                    Some(path) => tokio::fs::write(path, data).await?,
+                    None => std::io::stdout().write_all(&data)?,
+                }
+                Ok(())
+            })
+            .await
         }
-    }
-    Ok(())
+    };
+
+    // Always close the endpoint, even on error, so in-flight shard pushes
+    // finish cleanly and no "Endpoint dropped" warning is logged.
+    client.endpoint.close().await;
+    result
 }
 
 #[tokio::main]
