@@ -11,6 +11,7 @@ use anyhow::{Result, bail};
 use blake3::Hash;
 use iroh::{PublicKey, SecretKey};
 use std::net::SocketAddr;
+use rand::seq::SliceRandom;
 pub mod erasure;
 
 pub use erasure::{ErasureConfig, decode, encode};
@@ -20,7 +21,7 @@ use crate::client::manifest::{
     Manifest, ShardPlacement, bytes_to_hash, deserialize_manifest, etag_from_hash,
     serialize_manifest, sign_manifest, verify_manifest,
 };
-use crate::index::client::{index_put, index_read};
+use crate::index::client::{index_put, index_read, list_healthy_nodes};
 use crate::storage::blob::get_blob;
 
 pub struct PreparedUpload {
@@ -77,6 +78,7 @@ pub fn reconstruct_object(
 }
 
 /// A storage node the client can push/pull shards to/from.
+#[derive(Clone)]
 pub struct StorageTarget {
     pub node_id: PublicKey,
     pub addr: SocketAddr,
@@ -105,10 +107,15 @@ pub async fn put(
     key: &str,
     data: &[u8],
 ) -> Result<String> {
+     let (ec, targets) = if targets.is_empty() {
+        assign_shards(cfg).await?
+    } else {
+        (cfg.ec_config, targets.to_vec())
+    };
     if targets.is_empty() {
         bail!("no storage targets to distribute shards to");
     }
-    let prepared = prepare_upload(data, cfg.ec_config, &cfg.secret_key.to_bytes())?;
+    let prepared = prepare_upload(data, ec, &cfg.secret_key.to_bytes())?;
 
     // 1. Host each encrypted shard locally (as a provider) and keep the tags
     //    alive until the storage nodes have pulled them.
@@ -201,7 +208,17 @@ pub async fn get(
     bucket: &str,
     key: &str,
 ) -> Result<Vec<u8>> {
-    // Teach the endpoint the storage nodes' addresses (no DHT/discovery).
+
+    let targets: Vec<StorageTarget> = if targets.is_empty() {
+        list_healthy_nodes(&cfg.http, &cfg.index_addrs)
+            .await?
+            .into_iter()
+            .map(|n| StorageTarget { node_id: n.node_id, addr: n.addr })
+            .collect()
+    } else {
+        targets.to_vec()
+    };
+
     for t in targets {
         let ea = iroh::EndpointAddr::from_parts(t.node_id, [iroh::TransportAddr::Ip(t.addr)]);
         endpoint.connect(ea, iroh_blobs::ALPN).await?;
@@ -235,13 +252,42 @@ pub async fn get(
 
     let refs: Vec<Option<&[u8]>> = shards.iter().map(|o| o.as_deref()).collect();
     let master = cfg.secret_key.to_bytes();
+    // Reconstruction is driven by the manifest's recorded k/m, not the current
+    // config target — objects may have been written at a degraded redundancy.
+    let ec = ErasureConfig {
+        k: manifest.k as usize,
+        m: manifest.m as usize,
+    };
     reconstruct_object(
         &refs,
-        cfg.ec_config,
+        ec,
         &master,
         &bytes_to_hash(manifest.object_hash),
         manifest.ciphertext_size as usize,
     )
+}
+
+pub async fn assign_shards(cfg: &DataPlaneConfig) -> Result<(ErasureConfig, Vec<StorageTarget>)> {
+    let pool = list_healthy_nodes(&cfg.http, &cfg.index_addrs).await?;
+     if pool.is_empty() {
+        bail!("no healthy storage nodes");
+    }
+    let target = cfg.ec_config;
+    let total = target.total_shards().min(pool.len());   // best effort
+     let (k, m) = if total >= target.total_shards() {
+        (target.k, target.m)
+    } else {
+        let k = target.k.min(pool.len().saturating_sub(1).max(1));
+        (k, total - k)
+    };
+    let ec = ErasureConfig { k, m };
+    let mut chosen: Vec<_> = pool.iter().collect();
+    chosen.shuffle(&mut rand::thread_rng());
+    let targets = chosen.into_iter()
+        .take(total)
+        .map(|n| StorageTarget { node_id: n.node_id, addr: n.addr })
+        .collect();
+    Ok((ec, targets))
 }
 
 #[cfg(test)]
