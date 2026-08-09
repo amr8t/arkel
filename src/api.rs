@@ -139,6 +139,7 @@ pub fn router() -> Router<Arc<AppState>> {
             put(commit_manifest).get(read_manifest),
         )
         .route("/register", post(register_node))
+        .route("/nodes", get(list_nodes))
 }
 
 pub async fn serve_index(listener: tokio::net::TcpListener, app: Router) {
@@ -311,6 +312,28 @@ async fn list_objects(
                 contents,
             })
             .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Serialize)]
+pub struct RegisterNode {
+    pub node_id: String,
+    pub addr: String,
+}
+
+async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.state_machine.get_healthy_nodes(64).await {
+        Ok(nodes) => {
+            let nodes: Vec<RegisterNode> = nodes
+                .into_iter()
+                .map(|(node_id, addr)| RegisterNode {
+                    node_id: hex::encode(node_id),
+                    addr,
+                })
+                .collect();
+            Json(nodes).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

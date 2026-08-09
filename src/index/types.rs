@@ -27,6 +27,9 @@ pub enum IndexNodeRequest {
         capacity_bytes: u64,
         addr: String,
     },
+    MarkNodesOffline {
+        node_ids: Vec<Vec<u8>>,
+    },
 }
 
 impl fmt::Display for IndexNodeRequest {
@@ -42,6 +45,13 @@ impl fmt::Display for IndexNodeRequest {
             IndexNodeRequest::Batch(entries) => write!(f, "Batch({} entries)", entries.len()),
             IndexNodeRequest::RegisterNode { node_id, .. } => {
                 write!(f, "RegisterNode({})", hex::encode(node_id))
+            }
+            IndexNodeRequest::MarkNodesOffline { node_ids } => {
+                let ids: Vec<String> = node_ids
+                    .iter()
+                    .map(|id| hex::encode(id).chars().take(16).collect())
+                    .collect();
+                write!(f, "MarkNodesOffline({})", ids.join(", "))
             }
         }
     }

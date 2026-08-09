@@ -214,6 +214,15 @@ impl StateMachineInner {
                 );
                 IndexNodeResponse::ok()
             }
+
+            IndexNodeRequest::MarkNodesOffline { node_ids } => {
+                for id in node_ids {
+                    if let Some(ns) = node_registry.get_mut(&id) {
+                        ns.status = NodeStatus::Offline
+                    }
+                }
+                IndexNodeResponse::ok()
+            }
         };
         Ok(result)
     }
@@ -348,7 +357,7 @@ impl ArkelStateMachine {
     }
 
     pub async fn get_healthy_nodes(
-        self,
+        &self,
         count: usize,
     ) -> Result<Vec<(Vec<u8>, String)>, io::Error> {
         let sm = self.inner.lock().await;

@@ -54,6 +54,18 @@ INDEX_ADDRS = [
 # concentrating the tiny bucket-existence check on a single row.
 BUCKET_SHARD_COUNT = 64
 
+# M2+ object write is the manifest commit route. The index API does not
+# validate manifest content, so a stub payload stresses the Raft write path
+# without involving the data plane.
+STUB_MANIFEST = json.dumps(
+    {
+        "object_hash": [1] * 32,
+        "manifest_bytes": [2, 2, 2],
+        "signature": [3] * 64,
+    }
+)
+STUB_HEADERS = {"Content-Type": "application/json"}
+
 
 class NetworkEmulator:
     """Simulate latency and jitter between local nodes using tc-netem on loopback.
@@ -350,8 +362,11 @@ def basic_consistency_test(leader_port: int, nodes: list[Node]) -> bool:
         check=False,
         capture_output=True,
     )
+    # M2+ object write is the manifest commit route. The index API does not
+    # validate manifest content, so a stub payload stresses the Raft write path.
     subprocess.run(
-        ["curl", "-sS", "-X", "PUT", f"{base}/photos/avatar.png", "-d", "fake-blob-data"],
+        ["curl", "-sS", "-X", "PUT", f"{base}/manifest/photos/avatar.png",
+         "-H", "content-type: application/json", "-d", STUB_MANIFEST],
         check=False,
         capture_output=True,
     )
@@ -361,7 +376,7 @@ def basic_consistency_test(leader_port: int, nodes: list[Node]) -> bool:
     print("[test] Read-back from all 3 nodes (expecting identical metadata)...")
     objects: list[str] = []
     for node in nodes:
-        url = f"http://127.0.0.1:{node.port}/photos/avatar.png"
+        url = f"http://127.0.0.1:{node.port}/manifest/photos/avatar.png"
         body = subprocess.run(
             ["curl", "-sS", url], capture_output=True, text=True, timeout=5.0
         ).stdout
@@ -430,7 +445,7 @@ async def performance_benchmark(
 
     try:
         print("\n[perf] Warming up bucket...")
-        await _single_put(base, "perf", "warmup", "warmup")
+        await _single_put(base, "perf", "warmup")
 
         print("\n[perf] Running steady-state throughput test...")
         steady_latencies = await _run_rate_limited_phase(
@@ -465,10 +480,10 @@ def _key_for(seq: int) -> str:
     return f"obj_{seq:08x}"
 
 
-async def _single_put(base: str, bucket: str, key: str, body: str) -> None:
+async def _single_put(base: str, bucket: str, key: str) -> None:
     async with aiohttp.ClientSession() as session:
         async with session.put(
-            f"{base}/{bucket}/{key}", data=body, headers={"Content-Type": "application/octet-stream"}
+            f"{base}/manifest/{bucket}/{key}", data=STUB_MANIFEST, headers=STUB_HEADERS
         ) as resp:
             await resp.read()
             if not resp.ok:
@@ -500,10 +515,10 @@ async def _run_rate_limited_phase(
                     continue
                 bucket = _bucket_for(seq)
                 key = _key_for(seq)
-                url = f"{base}/{bucket}/{key}"
+                url = f"{base}/manifest/{bucket}/{key}"
                 start = time.perf_counter()
                 try:
-                    async with session.put(url, data=b"x") as resp:
+                    async with session.put(url, data=STUB_MANIFEST, headers=STUB_HEADERS) as resp:
                         await resp.read()
                         if not resp.ok:
                             errors.append(f"{resp.status} on {url}")
@@ -576,10 +591,10 @@ async def _run_saturated_phase(
                     counter += 1
                 bucket = _bucket_for(seq)
                 key = _key_for(seq)
-                url = f"{base}/{bucket}/{key}"
+                url = f"{base}/manifest/{bucket}/{key}"
                 start = time.perf_counter()
                 try:
-                    async with session.put(url, data=b"x") as resp:
+                    async with session.put(url, data=STUB_MANIFEST, headers=STUB_HEADERS) as resp:
                         await resp.read()
                         if not resp.ok:
                             errors.append(f"{resp.status} on {url}")
