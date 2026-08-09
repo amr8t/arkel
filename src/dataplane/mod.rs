@@ -219,9 +219,12 @@ pub async fn get(
         targets.to_vec()
     };
 
-    for t in targets {
+    // Teach reachable targets only — a dead node must not fail the whole read.
+    for t in &targets {
         let ea = iroh::EndpointAddr::from_parts(t.node_id, [iroh::TransportAddr::Ip(t.addr)]);
-        endpoint.connect(ea, iroh_blobs::ALPN).await?;
+        if let Err(e) = endpoint.connect(ea, iroh_blobs::ALPN).await {
+            tracing::warn!("skipping unreachable storage node {}: {e}", t.node_id);
+        }
     }
 
     let body = index_read(
@@ -237,17 +240,37 @@ pub async fn get(
 
     let manifest = deserialize_manifest(&manifest_bytes)?;
 
+    // Read-fault-tolerant fetch: collect shards until we have k, skipping any
+    // that fail (dead node, lost shard). The m parity shards are the slack.
     let total = manifest.k as usize + manifest.m as usize;
     let mut shards: Vec<Option<Vec<u8>>> = vec![None; total];
-    for placement in manifest.shards.iter().take(manifest.k as usize) {
-        let shard = get_blob(
+    let mut got = 0usize;
+    for placement in &manifest.shards {
+        match get_blob(
             store,
             endpoint,
             iroh_blobs::Hash::from(placement.blob_hash),
             placement.node_id,
         )
-        .await?;
-        shards[placement.shard_index as usize] = Some(shard);
+        .await
+        {
+            Ok(shard) => {
+                shards[placement.shard_index as usize] = Some(shard);
+                got += 1;
+                if got >= manifest.k as usize {
+                    break;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "shard {} download failed (skipping): {e}",
+                    placement.shard_index
+                );
+            }
+        }
+    }
+    if got < manifest.k as usize {
+        bail!("only {got} of {} shards available", manifest.k);
     }
 
     let refs: Vec<Option<&[u8]>> = shards.iter().map(|o| o.as_deref()).collect();

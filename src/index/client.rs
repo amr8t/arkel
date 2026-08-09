@@ -7,12 +7,20 @@ use std::net::SocketAddr;
 /// matches `current_leader`. No discovery/DHT — just a static candidate list.
 pub async fn find_leader(http: &reqwest::Client, index_addrs: &[String]) -> Result<String> {
     for url in index_addrs {
-        let resp: serde_json::Value = http
-            .get(format!("{url}/raft/metrics"))
-            .send()
-            .await?
-            .json()
-            .await?;
+        let resp = match http.get(format!("{url}/raft/metrics")).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("index node {url} unreachable: {e}");
+                continue; // a dead node must not block leader discovery
+            }
+        };
+        let resp: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("index node {url} bad metrics response: {e}");
+                continue;
+            }
+        };
         let id = resp["id"].as_u64();
         let leader = resp["current_leader"].as_u64();
         if let (Some(id), Some(leader)) = (id, leader) {

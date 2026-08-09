@@ -199,8 +199,10 @@ def kill_arkel_by_addr(addrs: Iterable[str]) -> None:
 
 def kill_arkel_storage_by_addr(addrs: Iterable[str]) -> None:
     for addr in addrs:
+        # Storage cmdline is `storage --index-addrs <urls> --addr <addr>`, so
+        # --addr is never contiguous after `storage` — match with `.*` in between.
         subprocess.run(
-            ["pkill", "-f", f"arkel storage --addr {addr}"],
+            ["pkill", "-f", f"arkel storage.*--addr {addr}"],
             capture_output=True,
         )
 
@@ -823,9 +825,15 @@ def cmd_kill(args: argparse.Namespace) -> int:
         stop_cluster(nodes)
         kill_arkel_storage_by_addr(STORAGE_ADDRS)
     elif args.port:
-        print(f"[kill] Stopping node on port {args.port}...")
         node = next((n for n in nodes if n.port == args.port), None)
         if node is None:
+            # Storage node port?
+            if args.port in (9001, 9002, 9003):
+                addr = STORAGE_ADDRS[args.port - 9001]
+                kill_arkel_storage_by_addr([addr])
+                time.sleep(0.5)
+                print(f"[kill] Stopping storage node on port {args.port}...")
+                return 0
             print(f"ERROR: Unknown port {args.port}")
             return 1
         if node.process:
@@ -1078,6 +1086,12 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=2.0,
         help="Data size in MB for size-parameterized scenarios (default: 2)",
+    )
+    smoke_parser.add_argument(
+        "--iters",
+        type=int,
+        default=5,
+        help="Iterations for the perf scenario (default: 5)",
     )
 
     args = parser.parse_args([command, *rest] if command else rest)
