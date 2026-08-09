@@ -7,8 +7,7 @@ async fn main() -> Result<()> {
 
     // ---- provider: hosts a 2MB blob ----
     let pdir = std::env::temp_dir().join(format!("arkel-dl-prov-{pid}"));
-    let pstore: iroh_blobs::api::Store =
-        iroh_blobs::store::fs::FsStore::load(&pdir).await?.into();
+    let pstore: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&pdir).await?.into();
     let pendpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .bind()
         .await?;
@@ -24,15 +23,15 @@ async fn main() -> Result<()> {
 
     let provider_id = pendpoint.id();
     let direct: Vec<SocketAddr> = pendpoint.bound_sockets();
-    let paddr = *direct
-        .first()
-        .expect("provider should have a bound socket");
-    println!("provider={provider_id} addr={paddr} hash={hash} blob_bytes={}", data.len());
+    let paddr = *direct.first().expect("provider should have a bound socket");
+    println!(
+        "provider={provider_id} addr={paddr} hash={hash} blob_bytes={}",
+        data.len()
+    );
 
     // ---- downloader: fetches the 2MB blob over QUIC ----
     let ddir = std::env::temp_dir().join(format!("arkel-dl-dl-{pid}"));
-    let dstore: iroh_blobs::api::Store =
-        iroh_blobs::store::fs::FsStore::load(&ddir).await?.into();
+    let dstore: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&ddir).await?.into();
     let dendpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .bind()
         .await?;

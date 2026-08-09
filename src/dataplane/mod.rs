@@ -215,8 +215,12 @@ pub async fn get(
         endpoint.connect(ea, iroh_blobs::ALPN).await?;
     }
 
-    let body =
-        index_read(&cfg.http, &cfg.index_addrs, &format!("manifest/{bucket}/{key}")).await?;
+    let body = index_read(
+        &cfg.http,
+        &cfg.index_addrs,
+        &format!("manifest/{bucket}/{key}"),
+    )
+    .await?;
     let manifest_bytes: Vec<u8> = serde_json::from_value(body["manifest_bytes"].clone())?;
     let sig_bytes: Vec<u8> = serde_json::from_value(body["signature"].clone())?;
     let signature = iroh::Signature::from_bytes(sig_bytes.as_slice().try_into()?);
@@ -227,8 +231,13 @@ pub async fn get(
     let total = manifest.k as usize + manifest.m as usize;
     let mut shards: Vec<Option<Vec<u8>>> = vec![None; total];
     for placement in manifest.shards.iter().take(manifest.k as usize) {
-        let shard = get_blob(store, endpoint, iroh_blobs::Hash::from(placement.blob_hash), placement.node_id)
-            .await?;
+        let shard = get_blob(
+            store,
+            endpoint,
+            iroh_blobs::Hash::from(placement.blob_hash),
+            placement.node_id,
+        )
+        .await?;
         shards[placement.shard_index as usize] = Some(shard);
     }
 
@@ -246,8 +255,7 @@ pub async fn get(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
+
     #[test]
     fn test_prepare_reconstruct_roundtrip() -> Result<()> {
         let ec_config = ErasureConfig { k: 4, m: 2 };

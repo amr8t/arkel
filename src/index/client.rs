@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::net::SocketAddr;
 
 /// Discover the current Raft leader's base URL among the given index node URLs.
 ///
@@ -94,4 +95,26 @@ pub async fn index_read(
         .await?;
 
     Ok(body)
+}
+
+pub struct HealthyNode {
+    pub node_id: iroh::PublicKey,
+    pub addr: SocketAddr,
+}
+pub async fn list_healthy_nodes(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+) -> Result<Vec<HealthyNode>> {
+    let body = index_read(http, index_addrs, "nodes").await?;
+    let arr = body.as_array().context("GET /nodes expected an array")?;
+    arr.iter()
+        .map(|n| {
+            let node_id = n["node_id"].as_str().context("missing node_id")?;
+            let addr = n["addr"].as_str().context("missing addr")?;
+            Ok(HealthyNode {
+                node_id: node_id.parse()?,
+                addr: addr.parse()?,
+            })
+        })
+        .collect()
 }

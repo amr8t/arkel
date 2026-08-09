@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use openraft::Raft;
+use openraft_rt::WatchReceiver;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 
@@ -256,7 +258,7 @@ async fn run_index_node(
 
     let state = std::sync::Arc::new(crate::api::AppState {
         raft: raft.clone(),
-        state_machine: state_machine_for_api,
+        state_machine: state_machine_for_api.clone(),
         batch_collector: batch_collector.clone(),
     });
 
@@ -267,6 +269,41 @@ async fn run_index_node(
         .merge(index::raft::raft_router(state.clone()))
         .with_state(state);
     tokio::spawn(crate::api::serve_index(listener, app));
+
+    // Node Health checker
+    let raft_health = raft.clone();
+    let sm_health = state_machine_for_api.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if !raft_health.is_leader() {
+                continue;
+            }
+            let current = raft_health
+                .metrics()
+                .borrow_watched()
+                .last_log_index
+                .unwrap_or(0);
+            let stale: Vec<Vec<u8>> = sm_health
+                .list_node_lags()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(_, last)| current.saturating_sub(*last) > 50) // LAG_THRESHOLD
+                .map(|(id, _)| id)
+                .collect();
+            if !stale.is_empty() {
+                raft_health
+                    .client_write(crate::index::IndexNodeRequest::MarkNodesOffline {
+                        node_ids: stale,
+                    })
+                    .await
+                    .ok();
+                tracing::info!("marked stale storage nodes offline");
+            }
+        }
+    });
 
     // Keep the Iroh endpoint alive for future gateway<->storage use.
     let _endpoint = endpoint;

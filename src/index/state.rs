@@ -370,6 +370,15 @@ impl ArkelStateMachine {
             .collect();
         Ok(nodes)
     }
+
+    pub async fn list_node_lags(&self) -> Result<Vec<(Vec<u8>, u64)>, io::Error> {
+        let sm = self.inner.lock().await;
+        Ok(sm
+            .node_registry
+            .iter()
+            .map(|(id, ns)| (id.clone(), ns.last_seen))
+            .collect())
+    }
 }
 
 impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {

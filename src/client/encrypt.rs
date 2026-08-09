@@ -52,7 +52,6 @@ pub fn decrypt_shard(encrypted: &[u8], key: &[u8; 32]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn roundtrip() {

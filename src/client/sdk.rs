@@ -21,8 +21,9 @@ impl Client {
             .secret_key(secret_key)
             .bind()
             .await?;
-        let store: iroh_blobs::api::Store =
-            iroh_blobs::store::fs::FsStore::load(&store_dir).await?.into();
+        let store: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&store_dir)
+            .await?
+            .into();
         // Serve blobs locally so storage nodes can pull shards from us (pull-based put).
         let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
         let router = iroh::protocol::Router::builder(endpoint.clone())
@@ -43,7 +44,16 @@ impl Client {
         data: &[u8],
         targets: &[StorageTarget],
     ) -> Result<String> {
-        dataplane::put(&self.cfg, targets, &self.endpoint, &self.store, bucket, key, data).await
+        dataplane::put(
+            &self.cfg,
+            targets,
+            &self.endpoint,
+            &self.store,
+            bucket,
+            key,
+            data,
+        )
+        .await
     }
 
     pub async fn get_object(

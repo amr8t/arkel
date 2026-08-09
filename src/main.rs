@@ -97,7 +97,8 @@ enum ClientCmd {
 }
 
 fn parse_targets(addrs: &[String]) -> Result<Vec<StorageTarget>> {
-    addrs.iter()
+    addrs
+        .iter()
         .map(|s| {
             let (node_id, addr) = s
                 .split_once('@')
@@ -222,8 +223,9 @@ async fn main() -> Result<()> {
             addr,
         } => {
             let blob_dir = base_dir.join("blobs");
-            let store: iroh_blobs::api::Store =
-                iroh_blobs::store::fs::FsStore::load(&blob_dir).await?.into();
+            let store: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&blob_dir)
+                .await?
+                .into();
             let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
 
             let shard_dir = base_dir.join("shards");

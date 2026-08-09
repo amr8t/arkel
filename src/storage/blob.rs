@@ -71,7 +71,12 @@ mod tests {
             .unwrap();
         let store: iroh_blobs::api::Store = db.into();
 
-        let tag = store.blobs().add_bytes(b"test data".to_vec()).temp_tag().await.unwrap();
+        let tag = store
+            .blobs()
+            .add_bytes(b"test data".to_vec())
+            .temp_tag()
+            .await
+            .unwrap();
         let hash = tag.hash();
         drop(tag);
 
