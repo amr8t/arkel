@@ -201,6 +201,7 @@ impl StateMachineInner {
                 node_id,
                 capacity_bytes,
                 addr,
+                relay_url,
             } => {
                 node_registry.insert(
                     node_id.clone(),
@@ -208,6 +209,7 @@ impl StateMachineInner {
                         node_id,
                         capacity_bytes,
                         addr,
+                        relay_url,
                         last_seen: log_index,
                         status: NodeStatus::Online,
                     },
@@ -359,14 +361,14 @@ impl ArkelStateMachine {
     pub async fn get_healthy_nodes(
         &self,
         count: usize,
-    ) -> Result<Vec<(Vec<u8>, String)>, io::Error> {
+    ) -> Result<Vec<(Vec<u8>, String, Option<String>)>, io::Error> {
         let sm = self.inner.lock().await;
         let nodes: Vec<_> = sm
             .node_registry
             .iter()
             .filter(|(_, ns)| ns.status == NodeStatus::Online)
             .take(count)
-            .map(|(id, ns)| (id.clone(), ns.addr.clone()))
+            .map(|(id, ns)| (id.clone(), ns.addr.clone(), ns.relay_url.clone()))
             .collect();
         Ok(nodes)
     }

@@ -18,6 +18,7 @@ impl Client {
     pub async fn new(cfg: DataPlaneConfig, store_dir: PathBuf) -> Result<Self> {
         let secret_key = cfg.secret_key.clone();
         let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .relay_mode(iroh::endpoint::RelayMode::Default)
             .secret_key(secret_key)
             .bind()
             .await?;

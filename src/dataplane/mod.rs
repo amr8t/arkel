@@ -10,8 +10,8 @@
 use anyhow::{Result, bail};
 use blake3::Hash;
 use iroh::{PublicKey, SecretKey};
-use std::net::SocketAddr;
 use rand::seq::SliceRandom;
+use std::net::SocketAddr;
 pub mod erasure;
 
 pub use erasure::{ErasureConfig, decode, encode};
@@ -31,7 +31,6 @@ pub struct PreparedUpload {
     pub shard_hashes: Vec<blake3::Hash>,
     pub erasure_config: ErasureConfig,
 }
-
 
 pub fn prepare_upload(
     data: &[u8],
@@ -82,6 +81,7 @@ pub fn reconstruct_object(
 pub struct StorageTarget {
     pub node_id: PublicKey,
     pub addr: SocketAddr,
+    pub relay_url: Option<String>,
 }
 
 /// Shared config for data-plane put/get operations.
@@ -107,7 +107,7 @@ pub async fn put(
     key: &str,
     data: &[u8],
 ) -> Result<String> {
-     let (ec, targets) = if targets.is_empty() {
+    let (ec, targets) = if targets.is_empty() {
         assign_shards(cfg).await?
     } else {
         (cfg.ec_config, targets.to_vec())
@@ -182,7 +182,11 @@ async fn pull_shard(
 ) -> Result<()> {
     use crate::storage::PULL_ALPN;
 
-    let ea = iroh::EndpointAddr::from_parts(target.node_id, [iroh::TransportAddr::Ip(target.addr)]);
+    let mut addrs = vec![iroh::TransportAddr::Ip(target.addr)];
+    if let Some(url) = &target.relay_url {
+        addrs.push(iroh::TransportAddr::Relay(url.parse()?));
+    }
+    let ea = iroh::EndpointAddr::from_parts(target.node_id, addrs);
     let conn = endpoint.connect(ea, PULL_ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(blob_hash.as_bytes()).await?;
@@ -208,12 +212,15 @@ pub async fn get(
     bucket: &str,
     key: &str,
 ) -> Result<Vec<u8>> {
-
     let targets: Vec<StorageTarget> = if targets.is_empty() {
         list_healthy_nodes(&cfg.http, &cfg.index_addrs)
             .await?
             .into_iter()
-            .map(|n| StorageTarget { node_id: n.node_id, addr: n.addr })
+            .map(|n| StorageTarget {
+                node_id: n.node_id,
+                addr: n.addr,
+                relay_url: n.relay_url,
+            })
             .collect()
     } else {
         targets.to_vec()
@@ -221,7 +228,11 @@ pub async fn get(
 
     // Teach reachable targets only — a dead node must not fail the whole read.
     for t in &targets {
-        let ea = iroh::EndpointAddr::from_parts(t.node_id, [iroh::TransportAddr::Ip(t.addr)]);
+        let mut addrs = vec![iroh::TransportAddr::Ip(t.addr)];
+        if let Some(url) = &t.relay_url {
+            addrs.push(iroh::TransportAddr::Relay(url.parse()?));
+        }
+        let ea = iroh::EndpointAddr::from_parts(t.node_id, addrs);
         if let Err(e) = endpoint.connect(ea, iroh_blobs::ALPN).await {
             tracing::warn!("skipping unreachable storage node {}: {e}", t.node_id);
         }
@@ -292,12 +303,12 @@ pub async fn get(
 
 pub async fn assign_shards(cfg: &DataPlaneConfig) -> Result<(ErasureConfig, Vec<StorageTarget>)> {
     let pool = list_healthy_nodes(&cfg.http, &cfg.index_addrs).await?;
-     if pool.is_empty() {
+    if pool.is_empty() {
         bail!("no healthy storage nodes");
     }
     let target = cfg.ec_config;
-    let total = target.total_shards().min(pool.len());   // best effort
-     let (k, m) = if total >= target.total_shards() {
+    let total = target.total_shards().min(pool.len()); // best effort
+    let (k, m) = if total >= target.total_shards() {
         (target.k, target.m)
     } else {
         let k = target.k.min(pool.len().saturating_sub(1).max(1));
@@ -306,9 +317,14 @@ pub async fn assign_shards(cfg: &DataPlaneConfig) -> Result<(ErasureConfig, Vec<
     let ec = ErasureConfig { k, m };
     let mut chosen: Vec<_> = pool.iter().collect();
     chosen.shuffle(&mut rand::thread_rng());
-    let targets = chosen.into_iter()
+    let targets = chosen
+        .into_iter()
         .take(total)
-        .map(|n| StorageTarget { node_id: n.node_id, addr: n.addr })
+        .map(|n| StorageTarget {
+            node_id: n.node_id,
+            addr: n.addr,
+            relay_url: n.relay_url.clone(),
+        })
         .collect();
     Ok((ec, targets))
 }

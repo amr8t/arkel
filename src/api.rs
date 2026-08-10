@@ -184,6 +184,7 @@ async fn register_node(
         node_id: payload.node_id,
         capacity_bytes: payload.capacity_bytes,
         addr: payload.addr,
+        relay_url: payload.relay_url,
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -254,6 +255,7 @@ pub struct RegisterNodePayload {
     pub node_id: Vec<u8>,
     pub capacity_bytes: u64,
     pub addr: String,
+    pub relay_url: Option<String>,
 }
 
 async fn read_manifest(
@@ -321,6 +323,7 @@ async fn list_objects(
 pub struct RegisterNode {
     pub node_id: String,
     pub addr: String,
+    pub relay_url: Option<String>,
 }
 
 async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -328,9 +331,10 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         Ok(nodes) => {
             let nodes: Vec<RegisterNode> = nodes
                 .into_iter()
-                .map(|(node_id, addr)| RegisterNode {
+                .map(|(node_id, addr, relay_url)| RegisterNode {
                     node_id: hex::encode(node_id),
                     addr,
+                    relay_url,
                 })
                 .collect();
             Json(nodes).into_response()

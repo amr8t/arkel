@@ -39,6 +39,7 @@ pub enum NodeMode {
         private_relay_url: Option<String>,
         index_addrs: Vec<String>,
         addr: SocketAddr,
+        advertise_addr: Option<SocketAddr>,
     },
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -134,15 +135,25 @@ impl Arkel {
             }
 
             ArkelNodeType::Storage => {
-                let (base_dir, blobs, store, _private_relay_url, index_addrs, addr) = match mode {
-                    NodeMode::Storage {
+                let (base_dir, blobs, store, _private_relay_url, index_addrs, addr, advertise_addr) =
+                    match mode {
+                        NodeMode::Storage {
                         base_dir,
                         blobs,
                         store,
                         private_relay_url,
                         index_addrs,
                         addr,
-                    } => (base_dir, blobs, store, private_relay_url, index_addrs, addr),
+                        advertise_addr,
+                    } => (
+                        base_dir,
+                        blobs,
+                        store,
+                        private_relay_url,
+                        index_addrs,
+                        addr,
+                        advertise_addr,
+                    ),
                     _ => unreachable!(),
                 };
 
@@ -156,18 +167,27 @@ impl Arkel {
                     .await
                     .context("Failed to bind storage endpoint")?;
 
+                let relay_url = loop {
+                    if let Some(u) = endpoint.addr().relay_urls().next() {
+                        break Some(u.to_string());
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                };
+
                 tracing::info!(
-                    "Storage Engine Online. ID: {}. endpointId: {}. Data: {:?}",
+                    "Storage Engine Online. ID: {}. endpointId: {}. relay_url: {}. Data: {:?}",
                     self.identity.raft_node_id(),
                     endpoint.id(),
+                    relay_url.as_deref().unwrap_or_default(),
                     disk_store.data_dir()
                 );
 
                 let registrar = NodeRegistrar::new(
                     &self.identity,
                     1_000_000_000_000, // 1 TB default capacity
-                    addr,
+                    advertise_addr.unwrap_or(addr),
                     index_addrs,
+                    relay_url,
                 );
                 tokio::spawn(registrar.run());
 

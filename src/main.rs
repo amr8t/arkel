@@ -55,6 +55,10 @@ enum Commands {
         /// Address the iroh QUIC endpoint binds to
         #[arg(long, default_value = "127.0.0.1:9001")]
         addr: SocketAddr,
+
+        /// Address advertised for registration (defaults to --addr). 
+        #[arg(long)]
+        advertise_addr: Option<SocketAddr>,
     },
     /// Upload/download objects as an iroh-native client
     Client {
@@ -106,6 +110,7 @@ fn parse_targets(addrs: &[String]) -> Result<Vec<StorageTarget>> {
             Ok(StorageTarget {
                 node_id: node_id.parse::<PublicKey>()?,
                 addr: addr.parse::<SocketAddr>()?,
+                relay_url: None,
             })
         })
         .collect()
@@ -231,6 +236,7 @@ async fn main() -> Result<()> {
             private_relay_url,
             index_addrs,
             addr,
+            advertise_addr,
         } => {
             let blob_dir = base_dir.join("blobs");
             let store: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&blob_dir)
@@ -250,6 +256,7 @@ async fn main() -> Result<()> {
                 private_relay_url,
                 index_addrs,
                 addr,
+                advertise_addr,
             }
         }
     };

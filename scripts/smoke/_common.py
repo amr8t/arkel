@@ -62,6 +62,24 @@ def random_file(size_bytes: int) -> Path:
     return p
 
 
+def wait_for_nodes(count: int = 3, timeout: float = 25.0) -> None:
+    """Poll /nodes until `count` storage nodes are registered (registration lags
+    the startup log line)."""
+    import json as _json
+    import urllib.request as _urllib
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with _urllib.urlopen("http://127.0.0.1:8001/nodes") as r:
+                if len(_json.load(r)) >= count:
+                    return
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError(f"expected {count} registered storage nodes")
+
+
 def _client(args: list[str], cwd: Path = REPO_ROOT) -> subprocess.CompletedProcess:
     return subprocess.run(
         [str(BINARY), "client", *args], cwd=cwd, capture_output=True, text=True

@@ -10,6 +10,7 @@ pub struct NodeRegistrar {
     capacity_bytes: u64,
     addr: SocketAddr,
     index_addrs: Vec<String>,
+    relay_url: Option<String>,
     http: reqwest::Client,
 }
 
@@ -19,12 +20,14 @@ impl NodeRegistrar {
         capacity_bytes: u64,
         addr: SocketAddr,
         index_addrs: Vec<String>,
+        relay_url: Option<String>,
     ) -> Self {
         Self {
             node_id: identity.node_id(),
             capacity_bytes,
             addr,
             index_addrs,
+            relay_url,
             http: reqwest::Client::new(),
         }
     }
@@ -34,6 +37,7 @@ impl NodeRegistrar {
             "node_id": self.node_id.as_bytes().to_vec(),
             "capacity_bytes": self.capacity_bytes,
             "addr": self.addr.to_string(),
+            "relay_url": self.relay_url,
         });
         index_write(&self.http, &self.index_addrs, "register", &payload).await?;
         tracing::info!("Registered with index cluster");
