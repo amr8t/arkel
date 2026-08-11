@@ -59,6 +59,7 @@ struct StateMachineSnapshotData {
     // is exactly what a SQL dump produces.
     buckets: Vec<(String, u64)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>, // (object_hash, bucket, key, manifest, signature)
+    shard_refs: Vec<(Vec<u8>, i64)>,                              // (blob_hash, refs)
 }
 
 #[derive(Debug)]
@@ -88,6 +89,10 @@ const SM_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS sm_meta (
         k TEXT PRIMARY KEY,
         v BLOB NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS shard_refs (
+        blob_hash BLOB PRIMARY KEY,
+        refs INTEGER NOT NULL
     );
 ";
 
@@ -156,6 +161,42 @@ impl StateMachineInner {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
+
+                // Decrement refs of the overwritten manifest (INSERT OR REPLACE
+                // drops the old row), so re-puts don't leak refcounts.
+                if let Some(existing) = tx
+                    .query_row(
+                        "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
+                        params![bucket, key],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?
+                {
+                    for s in crate::client::manifest::deserialize_manifest(&existing)
+                        .map_err(to_io_err)?
+                        .shards
+                    {
+                        tx.execute(
+                            "UPDATE shard_refs SET refs = refs - 1 WHERE blob_hash=?1 AND refs > 0",
+                            params![s.blob_hash.to_vec()],
+                        )
+                        .map_err(to_io_err)?;
+                    }
+                }
+                // Increment refs of the new manifest's shards.
+                for s in crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                    .map_err(to_io_err)?
+                    .shards
+                {
+                    tx.execute(
+                        "INSERT INTO shard_refs (blob_hash, refs) VALUES (?1, 1)
+                ON CONFLICT(blob_hash) DO UPDATE SET refs = refs + 1",
+                        params![s.blob_hash.to_vec()],
+                    )
+                    .map_err(to_io_err)?;
+                }
+
                 tx.execute(
                     "INSERT OR REPLACE INTO manifests (object_hash, bucket, key, manifest, signature, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     rusqlite::params![object_hash, bucket, key, manifest_bytes, signature, now],
@@ -195,6 +236,40 @@ impl StateMachineInner {
                     .map(|entry| Self::apply_command(tx, entry, log_index, node_registry))
                     .collect::<Result<Vec<_>, _>>()?;
                 IndexNodeResponse::batch(responses)
+            }
+
+            IndexNodeRequest::DeleteManifest { bucket, key } => {
+                if let Some(mb) = tx
+                    .query_row(
+                        "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
+                        params![bucket, key],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?
+                {
+                    for s in crate::client::manifest::deserialize_manifest(&mb)
+                        .map_err(to_io_err)?
+                        .shards
+                    {
+                        tx.execute(
+                            "UPDATE shard_refs SET refs = refs - 1 WHERE blob_hash=?1 AND refs > 0",
+                            params![s.blob_hash.to_vec()],
+                        )
+                        .map_err(to_io_err)?;
+                    }
+                }
+                let rows = tx
+                    .execute(
+                        "DELETE FROM manifests WHERE bucket=?1 AND key=?2",
+                        params![bucket, key],
+                    )
+                    .map_err(to_io_err)?;
+                if rows > 0 {
+                    IndexNodeResponse::ok()
+                } else {
+                    IndexNodeResponse::err("object not found")
+                }
             }
 
             IndexNodeRequest::RegisterNode {
@@ -237,6 +312,7 @@ impl StateMachineInner {
 pub struct ArkelStateMachineSnapshot {
     buckets: Vec<(String, u64)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>,
+    shard_refs: Vec<(Vec<u8>, i64)>,
     last_applied_log: Option<LogIdOf<ArkelRaftConfig>>,
     last_membership: StoredMembershipOf<ArkelRaftConfig>,
     snapshot_index: u64,
@@ -300,6 +376,14 @@ impl ArkelStateMachine {
         Ok(ArkelStateMachineSnapshot {
             buckets,
             manifests,
+            shard_refs: sm
+                .conn
+                .prepare_cached("SELECT blob_hash, refs FROM shard_refs")
+                .map_err(to_io_err)?
+                .query_map([], |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?)))
+                .map_err(to_io_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(to_io_err)?,
             last_applied_log: sm.last_applied_log.clone(),
             last_membership: sm.last_membership.clone(),
             snapshot_index: sm.snapshot_index,
@@ -356,6 +440,29 @@ impl ArkelStateMachine {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(to_io_err)?;
         Ok(keys)
+    }
+
+    /// Which of the given shard blob hashes are referenced by no live
+    /// manifest (refs == 0)? Used by the storage-node GC loop.
+    pub async fn gc_candidates(&self, hashes: &[[u8; 32]]) -> Result<Vec<Vec<u8>>, io::Error> {
+        let sm = self.inner.lock().await;
+        let mut out = Vec::new();
+        for h in hashes {
+            let refs: i64 = sm
+                .conn
+                .query_row(
+                    "SELECT refs FROM shard_refs WHERE blob_hash=?1",
+                    params![h.to_vec()],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(to_io_err)?
+                .unwrap_or(0);
+            if refs == 0 {
+                out.push(h.to_vec());
+            }
+        }
+        Ok(out)
     }
 
     pub async fn get_healthy_nodes(
@@ -523,6 +630,7 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
 
         tx.execute("DELETE FROM buckets", []).map_err(to_io_err)?;
         tx.execute("DELETE FROM manifests", []).map_err(to_io_err)?;
+        tx.execute("DELETE FROM shard_refs", []).map_err(to_io_err)?;
 
         {
             let mut bucket_stmt = tx
@@ -548,6 +656,14 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
                     0i64
                 ])
                 .map_err(to_io_err)?;
+            }
+        }
+        {
+            let mut stmt = tx
+                .prepare_cached("INSERT INTO shard_refs (blob_hash, refs) VALUES (?1, ?2)")
+                .map_err(to_io_err)?;
+            for (blob_hash, refs) in &snap_data.shard_refs {
+                stmt.execute(params![blob_hash, refs]).map_err(to_io_err)?;
             }
         }
 
@@ -597,6 +713,7 @@ impl RaftSnapshotBuilder<ArkelRaftConfig> for ArkelStateMachine {
         let snap_data = StateMachineSnapshotData {
             buckets: snapshot.buckets,
             manifests: snapshot.manifests,
+            shard_refs: snapshot.shard_refs,
         };
         let data = cbor_to_io(&snap_data)?;
 

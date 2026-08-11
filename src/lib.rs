@@ -138,24 +138,24 @@ impl Arkel {
                 let (base_dir, blobs, store, _private_relay_url, index_addrs, addr, advertise_addr) =
                     match mode {
                         NodeMode::Storage {
-                        base_dir,
-                        blobs,
-                        store,
-                        private_relay_url,
-                        index_addrs,
-                        addr,
-                        advertise_addr,
-                    } => (
-                        base_dir,
-                        blobs,
-                        store,
-                        private_relay_url,
-                        index_addrs,
-                        addr,
-                        advertise_addr,
-                    ),
-                    _ => unreachable!(),
-                };
+                            base_dir,
+                            blobs,
+                            store,
+                            private_relay_url,
+                            index_addrs,
+                            addr,
+                            advertise_addr,
+                        } => (
+                            base_dir,
+                            blobs,
+                            store,
+                            private_relay_url,
+                            index_addrs,
+                            addr,
+                            advertise_addr,
+                        ),
+                        _ => unreachable!(),
+                    };
 
                 let shard_dir = base_dir.join("shards");
                 tokio::fs::create_dir_all(&shard_dir).await?;

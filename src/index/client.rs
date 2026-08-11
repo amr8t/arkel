@@ -105,6 +105,15 @@ pub async fn index_read(
     Ok(body)
 }
 
+pub async fn index_delete(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    route: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    index_send(http, index_addrs, reqwest::Method::DELETE, route, payload).await
+}
+
 pub struct HealthyNode {
     pub node_id: iroh::PublicKey,
     pub addr: SocketAddr,
@@ -128,4 +137,26 @@ pub async fn list_healthy_nodes(
             })
         })
         .collect()
+}
+
+/// Ask the index which of the given shard blob hashes are referenced by no
+/// live manifest (refs == 0) — the storage GC candidates. Returns the
+/// unreferenced subset as hex strings.
+pub async fn gc_candidates(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    hashes: &[[u8; 32]],
+) -> Result<Vec<Vec<u8>>> {
+    let query: Vec<String> = hashes.iter().map(hex::encode).collect();
+    let body = index_read(
+        http,
+        index_addrs,
+        &format!("shards/gc-candidates?hashes={}", query.join(",")),
+    )
+    .await?;
+    let arr = body.as_array().context("GET /shards/gc-candidates expected an array")?;
+    Ok(arr
+        .iter()
+        .filter_map(|v| v.as_str().and_then(|s| hex::decode(s).ok()))
+        .collect())
 }

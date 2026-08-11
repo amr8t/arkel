@@ -21,7 +21,7 @@ use crate::client::manifest::{
     Manifest, ShardPlacement, bytes_to_hash, deserialize_manifest, etag_from_hash,
     serialize_manifest, sign_manifest, verify_manifest,
 };
-use crate::index::client::{index_put, index_read, list_healthy_nodes};
+use crate::index::client::{index_delete, index_put, index_read, list_healthy_nodes};
 use crate::storage::blob::get_blob;
 
 pub struct PreparedUpload {
@@ -172,6 +172,17 @@ pub async fn put(
     )
     .await?;
     Ok(etag_from_hash(prepared.object_hash.as_bytes()))
+}
+
+pub async fn delete(cfg: &DataPlaneConfig, bucket: &str, key: &str) -> Result<()> {
+    index_delete(
+        &cfg.http,
+        &cfg.index_addrs,
+        &format!("{bucket}/{key}"),
+        &serde_json::json!({}),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Ask a storage node to download a shard from us over the `arkel-pull` protocol.

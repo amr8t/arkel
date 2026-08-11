@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use openraft::raft::ClientWriteResponse;
 use serde::{Deserialize, Serialize};
@@ -134,12 +134,14 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_buckets))
         .route("/:bucket", put(create_bucket).get(list_objects))
+        .route("/:bucket/:key", delete(delete_object))
         .route(
             "/manifest/:bucket/:key",
             put(commit_manifest).get(read_manifest),
         )
         .route("/register", post(register_node))
         .route("/nodes", get(list_nodes))
+        .route("/shards/gc-candidates", get(gc_candidates))
 }
 
 pub async fn serve_index(listener: tokio::net::TcpListener, app: Router) {
@@ -339,6 +341,47 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                 .collect();
             Json(nodes).into_response()
         }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn delete_object(
+    State(state): State<Arc<AppState>>,
+    Path((bucket, key)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let cmd = IndexNodeRequest::DeleteManifest { bucket, key };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
+    }
+}
+
+/// Given a comma-separated hex list of shard blob hashes, return the subset
+/// referenced by no live manifest (refs == 0) — the storage GC candidates.
+async fn gc_candidates(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let hex_list = params.get("hashes").cloned().unwrap_or_default();
+    let hashes: Vec<[u8; 32]> = hex_list
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .filter_map(|h| {
+            let bytes = hex::decode(h).ok()?;
+            bytes.try_into().ok()
+        })
+        .collect();
+    match state.state_machine.gc_candidates(&hashes).await {
+        Ok(candidates) => Json(
+            candidates
+                .iter()
+                .map(hex::encode)
+                .collect::<Vec<String>>(),
+        )
+        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

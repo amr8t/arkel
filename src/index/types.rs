@@ -21,6 +21,10 @@ pub enum IndexNodeRequest {
         manifest_bytes: Vec<u8>,
         signature: Vec<u8>,
     },
+    DeleteManifest {
+        bucket: String,
+        key: String,
+    },
     Batch(Vec<IndexNodeRequest>),
     RegisterNode {
         node_id: Vec<u8>,
@@ -42,6 +46,9 @@ impl fmt::Display for IndexNodeRequest {
             IndexNodeRequest::DeleteBucket { name } => write!(f, "DeleteBucket({})", name),
             IndexNodeRequest::CommitManifest { object_hash, .. } => {
                 write!(f, "CommitManifest({})", hex::encode(object_hash))
+            }
+            IndexNodeRequest::DeleteManifest { bucket, key } => {
+                write!(f, "DeleteManifest({}, {})", bucket, key)
             }
             IndexNodeRequest::Batch(entries) => write!(f, "Batch({} entries)", entries.len()),
             IndexNodeRequest::RegisterNode { node_id, .. } => {

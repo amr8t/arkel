@@ -65,4 +65,8 @@ impl Client {
     ) -> Result<Vec<u8>> {
         dataplane::get(&self.cfg, targets, &self.endpoint, &self.store, bucket, key).await
     }
+
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
+        dataplane::delete(&self.cfg, bucket, key).await
+    }
 }

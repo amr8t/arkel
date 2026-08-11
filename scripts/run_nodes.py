@@ -931,6 +931,8 @@ def cmd_start_storage(args: argparse.Namespace) -> int:
             node.addr,
             "--data-dir",
             str(node.data_dir),
+            "--gc-interval-secs",
+            str(args.gc_interval_secs),
         ]
         with open(node.log_path, "w") as logfile:
             node.process = subprocess.Popen(
@@ -1070,6 +1072,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Index node HTTP URLs (space-separated) storage nodes register against "
              "(default: all three local index nodes)",
+    )
+    storage_parser.add_argument(
+        "--gc-interval-secs",
+        type=int,
+        default=3600,
+        help="Shard GC sweep interval in seconds (default: 3600)",
     )
 
     # smoke

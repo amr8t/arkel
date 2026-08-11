@@ -10,6 +10,7 @@ use iroh::PublicKey;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 const DEFAULT_INDEX_ADDRS: &str =
     "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003";
@@ -59,6 +60,10 @@ enum Commands {
         /// Address advertised for registration (defaults to --addr). 
         #[arg(long)]
         advertise_addr: Option<SocketAddr>,
+
+        /// How often to scan and delete unreferenced shards (seconds).
+        #[arg(long, default_value_t = 3600)]
+        gc_interval_secs: u64,
     },
     /// Upload/download objects as an iroh-native client
     Client {
@@ -97,6 +102,14 @@ enum ClientCmd {
         storage_addrs: Vec<String>,
         #[arg(long)]
         output: Option<PathBuf>,
+    },
+    /// Delete an object (removes its manifest via Raft; shards freed by GC)
+    Rm {
+        bucket: String,
+        key: String,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
     },
 }
 
@@ -176,6 +189,25 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
             })
             .await
         }
+        ClientCmd::Rm {
+            bucket,
+            key,
+            index_addrs,
+        } => {
+            let cfg = ClientConfig {
+                index_addrs,
+                secret_key: identity.secret_key().clone(),
+                ec_config: ErasureConfig { k: 4, m: 2 },
+                http: reqwest::Client::new(),
+            };
+            client = ArkelClient::new(cfg, store_dir).await?;
+            (async {
+                client.delete_object(&bucket, &key).await?;
+                println!("deleted {bucket}/{key}");
+                Ok(())
+            })
+            .await
+        }
     };
 
     // Always close the endpoint, even on error, so in-flight shard pushes
@@ -237,11 +269,106 @@ async fn main() -> Result<()> {
             index_addrs,
             addr,
             advertise_addr,
+            gc_interval_secs,
         } => {
             let blob_dir = base_dir.join("blobs");
-            let store: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&blob_dir)
-                .await?
-                .into();
+            let store: iroh_blobs::api::Store = {
+                use iroh_blobs::store::{GcConfig, ProtectCb, ProtectOutcome};
+                use std::collections::HashSet;
+
+                let mut options = iroh_blobs::store::fs::options::Options::new(&blob_dir);
+                let store_cell: Arc<tokio::sync::OnceCell<iroh_blobs::api::Store>> =
+                    Arc::new(tokio::sync::OnceCell::new());
+                let cell = store_cell.clone();
+                let idx_addrs = index_addrs.clone();
+                let http = reqwest::Client::new();
+                // The GC callback runs on iroh-blobs' internal runtime, which has
+                // IO disabled — so all network/file IO must be spawned onto the
+                // main runtime and awaited here.
+                let main_handle = tokio::runtime::Handle::current();
+                let cb: ProtectCb = Arc::new(move |live: &mut HashSet<iroh_blobs::Hash>| {
+                    let cell = cell.clone();
+                    let idx_addrs = idx_addrs.clone();
+                    let http = http.clone();
+                    let main_handle = main_handle.clone();
+                    Box::pin(async move {
+                        let store = match cell.get() {
+                            Some(s) => s.clone(),
+                            None => return ProtectOutcome::Abort,
+                        };
+                        let all = match main_handle
+                            .spawn(async move { store.blobs().list().hashes().await })
+                            .await
+                        {
+                            Ok(Ok(h)) => h,
+                            Ok(Err(e)) => {
+                                tracing::warn!("GC: list blobs failed: {e}");
+                                return ProtectOutcome::Abort;
+                            }
+                            Err(e) => {
+                                tracing::warn!("GC: list blobs task failed: {e}");
+                                return ProtectOutcome::Abort;
+                            }
+                        };
+                        if all.is_empty() {
+                            return ProtectOutcome::Continue;
+                        }
+                        let hashes32: Vec<[u8; 32]> =
+                            all.iter().map(|h| *h.as_bytes()).collect();
+                        let candidates = match main_handle
+                            .spawn({
+                                let http = http.clone();
+                                let idx_addrs = idx_addrs.clone();
+                                async move {
+                                    arkel::index::client::gc_candidates(
+                                        &http, &idx_addrs, &hashes32,
+                                    )
+                                    .await
+                                }
+                            })
+                            .await
+                        {
+                            Ok(Ok(c)) => c,
+                            Ok(Err(e)) => {
+                                tracing::warn!("GC: candidate query failed: {e}");
+                                return ProtectOutcome::Abort;
+                            }
+                            Err(e) => {
+                                tracing::warn!("GC: candidate query task failed: {e}");
+                                return ProtectOutcome::Abort;
+                            }
+                        };
+                        let doomed: HashSet<[u8; 32]> = candidates
+                            .iter()
+                            .filter_map(|c| <[u8; 32]>::try_from(c.as_slice()).ok())
+                            .collect();
+                        for h in &all {
+                            if !doomed.contains(h.as_bytes()) {
+                                live.insert(*h);
+                            }
+                        }
+                        tracing::info!(
+                            "GC: protecting {} blobs, {} unreferenced",
+                            live.len(),
+                            doomed.len()
+                        );
+                        ProtectOutcome::Continue
+                    })
+                });
+                options.gc = Some(GcConfig {
+                    interval: std::time::Duration::from_secs(gc_interval_secs),
+                    add_protected: Some(cb),
+                });
+                let store: iroh_blobs::api::Store =
+                    iroh_blobs::store::fs::FsStore::load_with_opts(
+                        blob_dir.join("blobs.db"),
+                        options,
+                    )
+                    .await?
+                        .into();
+                let _ = store_cell.set(store.clone());
+                store
+            };
             let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
 
             let shard_dir = base_dir.join("shards");

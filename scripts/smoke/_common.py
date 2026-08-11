@@ -17,6 +17,9 @@ BINARY = REPO_ROOT / "target" / "debug" / "arkel"
 CLIENT_DATA = REPO_ROOT / ".arkel_client_data"
 INDEX_FLAG = ",".join(f"http://127.0.0.1:{p}" for p in (8001, 8002, 8003))
 STORAGE_PORTS = (9001, 9002, 9003)
+STORAGE_DATA_DIRS = [
+    REPO_ROOT / f".arkel_storage_{port}_data" for port in STORAGE_PORTS
+]
 
 
 def run_nodes(*cmd: str) -> None:
@@ -117,3 +120,36 @@ def get(bucket: str, key: str, storage_flag: str = "") -> tuple[float, Path]:
     if r.returncode != 0:
         raise RuntimeError(f"get failed: {r.stderr.strip()[-400:]}")
     return elapsed, out
+
+
+def rm(bucket: str, key: str) -> None:
+    """Delete an object via `arkel client rm`."""
+    r = _client(["rm", bucket, key, "--index-addrs", INDEX_FLAG])
+    if r.returncode != 0:
+        raise RuntimeError(f"rm failed: {r.stderr.strip()[-400:]}")
+
+
+def count_shards() -> int:
+    """Total shard blob `.data` files across all three storage nodes' FsStores.
+
+    Pulled shards land in the iroh-blobs store as `blobs/data/<hex>.data`.
+    """
+    total = 0
+    for d in STORAGE_DATA_DIRS:
+        blob_data = d / "blobs" / "data"
+        if blob_data.is_dir():
+            total += sum(
+                1
+                for e in blob_data.iterdir()
+                if e.is_file() and e.name.endswith(".data")
+            )
+    return total
+
+
+def restart_storage(gc_interval_secs: int = 5) -> None:
+    """Restart the storage nodes with a short GC sweep interval (for smoke)."""
+    for port in STORAGE_PORTS:
+        run_nodes("kill", "--port", str(port))
+    time.sleep(0.5)
+    run_nodes("start-storage", "--gc-interval-secs", str(gc_interval_secs))
+    time.sleep(2)
