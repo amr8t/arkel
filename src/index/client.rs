@@ -32,6 +32,21 @@ pub async fn find_leader(http: &reqwest::Client, index_addrs: &[String]) -> Resu
     bail!("no index leader found")
 }
 
+/// Compute the Arkel auth headers (Authorization + X-Arkel-Time) for a request.
+fn auth_headers(secret_key: &iroh::SecretKey, method: &reqwest::Method,
+                path: &str, body: &[u8]) -> (String, String) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let payload = format!("{} {} {} {now}", method.as_str(), path,
+                          hex::encode(blake3::hash(body).as_bytes()));
+    let sig = secret_key.sign(payload.as_bytes());
+    (
+        format!("Arkel {}:{}", hex::encode(secret_key.public().as_bytes()),
+                hex::encode(sig.to_bytes())),
+        now.to_string(),
+    )
+}
+
 /// Issue a write to the index cluster, transparently surviving leader changes.
 ///
 /// OpenRaft followers reject `client_write` with `ForwardToLeader`, so this
@@ -44,12 +59,18 @@ async fn index_send(
     method: reqwest::Method,
     route: &str,
     payload: &serde_json::Value,
+    secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
     for _ in 0..3 {
         let leader = find_leader(http, index_addrs).await?;
+        let body = serde_json::to_vec(payload)?;
+        let (auth, time) = auth_headers(secret_key, &method, route, &body);
         let resp = http
             .request(method.clone(), format!("{leader}/{route}"))
-            .json(payload)
+            .header("authorization", auth)
+            .header("x-arkel-time", time)
+            .header("content-type", "application/json")
+            .body(body)
             .send()
             .await?;
         let status = resp.status();
@@ -74,8 +95,9 @@ pub async fn index_write(
     index_addrs: &[String],
     route: &str,
     payload: &serde_json::Value,
+    secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::POST, route, payload).await
+    index_send(http, index_addrs, reqwest::Method::POST, route, payload, secret_key).await
 }
 
 /// PUT a write to the index cluster (used by manifest commit, `PUT /manifest/...`).
@@ -84,8 +106,9 @@ pub async fn index_put(
     index_addrs: &[String],
     route: &str,
     payload: &serde_json::Value,
+    secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::PUT, route, payload).await
+    index_send(http, index_addrs, reqwest::Method::PUT, route, payload, secret_key).await
 }
 
 pub async fn index_read(
@@ -110,8 +133,9 @@ pub async fn index_delete(
     index_addrs: &[String],
     route: &str,
     payload: &serde_json::Value,
+    secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::DELETE, route, payload).await
+    index_send(http, index_addrs, reqwest::Method::DELETE, route, payload, secret_key).await
 }
 
 pub struct HealthyNode {

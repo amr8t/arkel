@@ -19,7 +19,7 @@ pub use erasure::{ErasureConfig, decode, encode};
 use crate::client::encrypt::{decrypt_shard, derive_key, encrypt_shard};
 use crate::client::manifest::{
     Manifest, ShardPlacement, bytes_to_hash, deserialize_manifest, etag_from_hash,
-    serialize_manifest, sign_manifest, verify_manifest,
+    serialize_manifest,
 };
 use crate::index::client::{index_delete, index_put, index_read, list_healthy_nodes};
 use crate::storage::blob::get_blob;
@@ -159,7 +159,6 @@ pub async fn put(
         shards,
     };
     let manifest_bytes = serialize_manifest(&manifest)?;
-    let signature = sign_manifest(&manifest_bytes, &cfg.secret_key)?;
     index_put(
         &cfg.http,
         &cfg.index_addrs,
@@ -167,8 +166,8 @@ pub async fn put(
         &serde_json::json!({
             "object_hash": prepared.object_hash.as_bytes().to_vec(),
             "manifest_bytes": manifest_bytes,
-            "signature": signature.to_bytes().to_vec(),
         }),
+        &cfg.secret_key,
     )
     .await?;
     Ok(etag_from_hash(prepared.object_hash.as_bytes()))
@@ -180,6 +179,7 @@ pub async fn delete(cfg: &DataPlaneConfig, bucket: &str, key: &str) -> Result<()
         &cfg.index_addrs,
         &format!("{bucket}/{key}"),
         &serde_json::json!({}),
+        &cfg.secret_key,
     )
     .await?;
     Ok(())
@@ -256,9 +256,6 @@ pub async fn get(
     )
     .await?;
     let manifest_bytes: Vec<u8> = serde_json::from_value(body["manifest_bytes"].clone())?;
-    let sig_bytes: Vec<u8> = serde_json::from_value(body["signature"].clone())?;
-    let signature = iroh::Signature::from_bytes(sig_bytes.as_slice().try_into()?);
-    verify_manifest(&manifest_bytes, &signature, &cfg.secret_key.public())?;
 
     let manifest = deserialize_manifest(&manifest_bytes)?;
 

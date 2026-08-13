@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
+use axum::body::Bytes;
+use axum::http::HeaderMap;
 
 pub struct BatchCollector {
     entries: Mutex<
@@ -160,14 +162,22 @@ pub async fn serve_index(listener: tokio::net::TcpListener, app: Router) {
 async fn create_bucket(
     State(state): State<Arc<AppState>>,
     Path(bucket): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request(
+        "PUT", "/", &body, &headers,
+    ) {
+        Ok(pk) => pk,
+        Err(e) => return (StatusCode::UNAUTHORIZED,
+                          Json(IndexNodeResponse::err(&e))).into_response(),
+    };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let cmd = IndexNodeRequest::CreateBucket {
-        name: bucket,
-        created_at: now,
+        name: bucket, created_at: now, owner: caller.as_bytes().to_vec(),
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -228,20 +238,31 @@ pub struct ListedObject {
 pub struct CommitManifestPayload {
     pub object_hash: Vec<u8>,
     pub manifest_bytes: Vec<u8>,
-    pub signature: Vec<u8>,
 }
 
 async fn commit_manifest(
     State(state): State<Arc<AppState>>,
     Path((bucket, key)): Path<(String, String)>,
-    Json(payload): Json<CommitManifestPayload>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request(
+        "PUT", &format!("manifest/{bucket}/{key}"), &body, &headers,
+    ) {
+        Ok(pk) => pk,
+        Err(e) => return (StatusCode::UNAUTHORIZED,
+                          Json(IndexNodeResponse::err(&e))).into_response(),
+    };
+    let payload: CommitManifestPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST,
+                          Json(IndexNodeResponse::err(&e.to_string()))).into_response(),
+    };
     let cmd = IndexNodeRequest::CommitManifest {
-        bucket,
-        key,
+        bucket, key,
         object_hash: payload.object_hash,
         manifest_bytes: payload.manifest_bytes,
-        signature: payload.signature,
+        caller: caller.as_bytes().to_vec(),
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -348,8 +369,19 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 async fn delete_object(
     State(state): State<Arc<AppState>>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
-    let cmd = IndexNodeRequest::DeleteManifest { bucket, key };
+    let caller = match crate::index::auth::verify_request(
+        "DELETE", &format!("{bucket}/{key}"), &body, &headers,
+    ) {
+        Ok(pk) => pk,
+        Err(e) => return (StatusCode::UNAUTHORIZED,
+                          Json(IndexNodeResponse::err(&e))).into_response(),
+    };
+    let cmd = IndexNodeRequest::DeleteManifest {
+        bucket, key, caller: caller.as_bytes().to_vec(),
+    };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err(e) => {

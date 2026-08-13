@@ -5,8 +5,15 @@ use iroh::PublicKey;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+/// Registers this storage node with the index cluster.
+///
+/// Intentionally unauthenticated server-side for beta: the index ignores the
+/// request signature on /register, so a node can impersonate another identity.
+/// Shard GC (/shards/gc-candidates) is likewise unsigned. Revisit both with
+/// node attestation.
 pub struct NodeRegistrar {
     node_id: PublicKey,
+    secret_key: iroh::SecretKey,
     capacity_bytes: u64,
     addr: SocketAddr,
     index_addrs: Vec<String>,
@@ -24,6 +31,7 @@ impl NodeRegistrar {
     ) -> Self {
         Self {
             node_id: identity.node_id(),
+            secret_key: identity.secret_key().clone(),
             capacity_bytes,
             addr,
             index_addrs,
@@ -39,7 +47,7 @@ impl NodeRegistrar {
             "addr": self.addr.to_string(),
             "relay_url": self.relay_url,
         });
-        index_write(&self.http, &self.index_addrs, "register", &payload).await?;
+        index_write(&self.http, &self.index_addrs, "register", &payload, &self.secret_key).await?;
         tracing::info!("Registered with index cluster");
         Ok(())
     }

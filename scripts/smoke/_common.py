@@ -83,48 +83,66 @@ def wait_for_nodes(count: int = 3, timeout: float = 25.0) -> None:
     raise RuntimeError(f"expected {count} registered storage nodes")
 
 
-def _client(args: list[str], cwd: Path = REPO_ROOT) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [str(BINARY), "client", *args], cwd=cwd, capture_output=True, text=True
-    )
+def _client(
+    args: list[str], cwd: Path = REPO_ROOT, data_dir: Path | None = None
+) -> subprocess.CompletedProcess:
+    cmd = [str(BINARY), "client"]
+    if data_dir is not None:
+        cmd += ["--data-dir", str(data_dir)]
+    cmd += args
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
 
 
-def put(bucket: str, key: str, data: Path, storage_flag: str = "") -> tuple[float, str]:
+def put(
+    bucket: str,
+    key: str,
+    data: Path,
+    storage_flag: str = "",
+    data_dir: Path | None = None,
+) -> tuple[float, str]:
     """Upload `data`; returns (elapsed_seconds, etag).
 
     Wipes only the blob cache, NOT the identity — the client's key must persist
-    so manifest signatures verify on get (it's the signing + decryption key).
+    so manifest decryption works on get. `data_dir` selects a client identity
+    (for two-identity access-control smokes).
     """
-    shutil.rmtree(CLIENT_DATA / "blobs", ignore_errors=True)
+    base = data_dir or CLIENT_DATA
+    shutil.rmtree(base / "blobs", ignore_errors=True)
     args = ["put", str(data), "--bucket", bucket, "--key", key, "--index-addrs", INDEX_FLAG]
     if storage_flag:
         args += ["--storage-addrs", storage_flag]
     start = time.perf_counter()
-    r = _client(args)
+    r = _client(args, data_dir=data_dir)
     elapsed = time.perf_counter() - start
     if r.returncode != 0:
         raise RuntimeError(f"put failed: {r.stderr.strip()[-400:]}")
     return elapsed, r.stdout.strip().splitlines()[-1]
 
 
-def get(bucket: str, key: str, storage_flag: str = "") -> tuple[float, Path]:
+def get(
+    bucket: str,
+    key: str,
+    storage_flag: str = "",
+    data_dir: Path | None = None,
+) -> tuple[float, Path]:
     """Download (network-only: wipe client blobs first); returns (elapsed_seconds, out_path)."""
-    shutil.rmtree(CLIENT_DATA / "blobs", ignore_errors=True)
+    base = data_dir or CLIENT_DATA
+    shutil.rmtree(base / "blobs", ignore_errors=True)
     out = Path(tempfile.mkdtemp(prefix="arkel-smoke-out-")) / "out.bin"
     args = ["get", bucket, key, "--index-addrs", INDEX_FLAG, "--output", str(out)]
     if storage_flag:
         args += ["--storage-addrs", storage_flag]
     start = time.perf_counter()
-    r = _client(args)
+    r = _client(args, data_dir=data_dir)
     elapsed = time.perf_counter() - start
     if r.returncode != 0:
         raise RuntimeError(f"get failed: {r.stderr.strip()[-400:]}")
     return elapsed, out
 
 
-def rm(bucket: str, key: str) -> None:
+def rm(bucket: str, key: str, data_dir: Path | None = None) -> None:
     """Delete an object via `arkel client rm`."""
-    r = _client(["rm", bucket, key, "--index-addrs", INDEX_FLAG])
+    r = _client(["rm", bucket, key, "--index-addrs", INDEX_FLAG], data_dir=data_dir)
     if r.returncode != 0:
         raise RuntimeError(f"rm failed: {r.stderr.strip()[-400:]}")
 

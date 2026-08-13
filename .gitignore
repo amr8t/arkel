@@ -6,3 +6,4 @@
 # Local log files from scripts/run_nodes.sh
 logs/
 milestones/
+__pycache__/

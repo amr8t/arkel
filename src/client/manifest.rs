@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use iroh::SignatureError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -30,22 +29,6 @@ pub fn deserialize_manifest(bytes: &[u8]) -> Result<Manifest> {
     let manifest: Manifest =
         serde_cbor::from_slice(bytes).context("Failed to deserialize manifest from CBOR")?;
     Ok(manifest)
-}
-
-pub fn sign_manifest(
-    manifest_bytes: &[u8],
-    secret_key: &iroh::SecretKey,
-) -> Result<iroh::Signature> {
-    let signature = secret_key.sign(manifest_bytes);
-    Ok(signature)
-}
-
-pub fn verify_manifest(
-    manifest_bytes: &[u8],
-    signature: &iroh::Signature,
-    public_key: &iroh::PublicKey,
-) -> Result<(), SignatureError> {
-    public_key.verify(manifest_bytes, signature)
 }
 
 pub fn etag_from_hash(hash: &[u8; 32]) -> String {

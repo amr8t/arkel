@@ -57,7 +57,7 @@ fn set_busy_timeout(conn: &Connection, ms: i32) -> Result<(), io::Error> {
 struct StateMachineSnapshotData {
     // Vec, not HashMap: row order is irrelevant for correctness, and this
     // is exactly what a SQL dump produces.
-    buckets: Vec<(String, u64)>,
+    buckets: Vec<(String, u64, Vec<u8>)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>, // (object_hash, bucket, key, manifest, signature)
     shard_refs: Vec<(Vec<u8>, i64)>,                              // (blob_hash, refs)
 }
@@ -75,7 +75,8 @@ struct StateMachineInner {
 const SM_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS buckets (
         name TEXT PRIMARY KEY,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        owner BLOB NOT NULL
     );
     CREATE TABLE IF NOT EXISTS manifests (
         bucket TEXT NOT NULL,
@@ -136,6 +137,16 @@ impl StateMachineInner {
         })
     }
 
+    fn bucket_owner(tx: &rusqlite::Transaction<'_>, bucket: &str) -> Result<Option<Vec<u8>>, io::Error> {
+        tx.query_row(
+        "SELECT owner FROM buckets WHERE name=?1",
+        params![bucket],
+        |r| r.get::<_, Vec<u8>>(0),
+    )
+    .optional()
+    .map_err(to_io_err)
+    }
+
     /// Apply one command inside an already-open transaction. No fsync here —
     /// the caller commits once for the whole batch.
     ///
@@ -155,12 +166,19 @@ impl StateMachineInner {
                 key,
                 object_hash,
                 manifest_bytes,
-                signature,
+                caller,
             } => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
+
+                let owner = Self::bucket_owner(tx, &bucket)?;
+                if let Some(o) = &owner {
+                    if *o != caller {
+                        return Ok(IndexNodeResponse::err("forbidden"));
+                    }
+                }
 
                 // Decrement refs of the overwritten manifest (INSERT OR REPLACE
                 // drops the old row), so re-puts don't leak refcounts.
@@ -198,26 +216,37 @@ impl StateMachineInner {
                 }
 
                 tx.execute(
+                    "INSERT OR IGNORE INTO buckets (name, created_at, owner) VALUES (?1, ?2, ?3)",
+                    params![bucket, now, caller],
+                )
+                .map_err(to_io_err)?;
+                tx.execute(
                     "INSERT OR REPLACE INTO manifests (object_hash, bucket, key, manifest, signature, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    rusqlite::params![object_hash, bucket, key, manifest_bytes, signature, now],
+                    rusqlite::params![object_hash, bucket, key, manifest_bytes, Vec::<u8>::new(), now],
                 )
                 .map_err(to_io_err)?;
-                tx.execute(
-                    "INSERT OR IGNORE INTO buckets (name, created_at) VALUES (?1, ?2)",
-                    rusqlite::params![bucket, now],
-                )
-                .map_err(to_io_err)?;
+
                 IndexNodeResponse::ok()
             }
-            IndexNodeRequest::CreateBucket { name, created_at } => {
-                tx.execute(
-                    "INSERT OR IGNORE INTO buckets (name, created_at) VALUES (?1, ?2)",
-                    params![name, created_at as i64],
-                )
-                .map_err(to_io_err)?;
-                IndexNodeResponse::ok()
+            IndexNodeRequest::CreateBucket { name, created_at, owner } => {
+                let existing = Self::bucket_owner(tx, &name)?;
+                match existing {
+                    Some(o) if o == owner => IndexNodeResponse::ok(),
+                    Some(_) => IndexNodeResponse::err("bucket owned by another key"),
+                    None => {
+                        tx.execute(
+                            "INSERT INTO buckets (name, created_at, owner) VALUES (?1, ?2, ?3)",
+                            params![name, created_at as i64, owner],
+                        )
+                        .map_err(to_io_err)?;
+                        IndexNodeResponse::ok()
+                    }
+                }
             }
-            IndexNodeRequest::DeleteBucket { name } => {
+            IndexNodeRequest::DeleteBucket { name, caller } => {
+                if Self::bucket_owner(tx, &name)?.as_deref() != Some(caller.as_slice()) {
+                    return Ok(IndexNodeResponse::err("forbidden"));
+                }
                 let rows = tx
                     .execute("DELETE FROM buckets WHERE name = ?1", params![name])
                     .map_err(to_io_err)?;
@@ -238,7 +267,10 @@ impl StateMachineInner {
                 IndexNodeResponse::batch(responses)
             }
 
-            IndexNodeRequest::DeleteManifest { bucket, key } => {
+            IndexNodeRequest::DeleteManifest { bucket, key, caller } => {
+                if Self::bucket_owner(tx, &bucket)?.as_deref() != Some(caller.as_slice()) {
+                    return Ok(IndexNodeResponse::err("forbidden"));
+                }
                 if let Some(mb) = tx
                     .query_row(
                         "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
@@ -310,7 +342,7 @@ impl StateMachineInner {
 /// writers while the Raft engine wants a snapshot builder.
 #[derive(Clone)]
 pub struct ArkelStateMachineSnapshot {
-    buckets: Vec<(String, u64)>,
+    buckets: Vec<(String, u64, Vec<u8>)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>,
     shard_refs: Vec<(Vec<u8>, i64)>,
     last_applied_log: Option<LogIdOf<ArkelRaftConfig>>,
@@ -345,11 +377,11 @@ impl ArkelStateMachine {
 
         let mut buckets_stmt = sm
             .conn
-            .prepare_cached("SELECT name, created_at FROM buckets")
+            .prepare_cached("SELECT name, created_at, owner FROM buckets")
             .map_err(to_io_err)?;
         let buckets = buckets_stmt
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+               Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, Vec<u8>>(2)?))
             })
             .map_err(to_io_err)?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -395,7 +427,7 @@ impl ArkelStateMachine {
         let sm = self.inner.lock().await;
         let mut stmt = sm
             .conn
-            .prepare_cached("SELECT name FROM buckets")
+            .prepare_cached("SELECT name, owner FROM buckets")
             .map_err(to_io_err)?;
         let names = stmt
             .query_map([], |r| r.get::<_, String>(0))
@@ -634,11 +666,11 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
 
         {
             let mut bucket_stmt = tx
-                .prepare_cached("INSERT INTO buckets (name, created_at) VALUES (?1, ?2)")
+                .prepare_cached("INSERT INTO buckets (name, created_at, owner) VALUES (?1, ?2, ?3)")
                 .map_err(to_io_err)?;
-            for (name, created_at) in &snap_data.buckets {
+            for (name, created_at, owner) in &snap_data.buckets {
                 bucket_stmt
-                    .execute(params![name, *created_at as i64])
+                    .execute(params![name, *created_at as i64, owner])
                     .map_err(to_io_err)?;
             }
         }
