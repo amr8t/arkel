@@ -10,23 +10,23 @@ pub enum IndexNodeRequest {
         name: String,
         #[serde(default)]
         created_at: u64,
-        owner: Vec<u8>
+        owner: Vec<u8>,
     },
     DeleteBucket {
         name: String,
-        caller: Vec<u8>
+        caller: Vec<u8>,
     },
     CommitManifest {
         bucket: String,
         key: String,
         object_hash: Vec<u8>,
         manifest_bytes: Vec<u8>,
-        caller: Vec<u8>
+        caller: Vec<u8>,
     },
     DeleteManifest {
         bucket: String,
         key: String,
-        caller: Vec<u8>
+        caller: Vec<u8>,
     },
     Batch(Vec<IndexNodeRequest>),
     RegisterNode {
@@ -43,7 +43,9 @@ pub enum IndexNodeRequest {
 impl fmt::Display for IndexNodeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            IndexNodeRequest::CreateBucket { name, created_at, .. } => {
+            IndexNodeRequest::CreateBucket {
+                name, created_at, ..
+            } => {
                 write!(f, "CreateBucket({}, {})", name, created_at)
             }
             IndexNodeRequest::DeleteBucket { name, .. } => write!(f, "DeleteBucket({})", name),

@@ -57,7 +57,7 @@ enum Commands {
         #[arg(long, default_value = "127.0.0.1:9001")]
         addr: SocketAddr,
 
-        /// Address advertised for registration (defaults to --addr). 
+        /// Address advertised for registration (defaults to --addr).
         #[arg(long)]
         advertise_addr: Option<SocketAddr>,
 
@@ -313,8 +313,7 @@ async fn main() -> Result<()> {
                         if all.is_empty() {
                             return ProtectOutcome::Continue;
                         }
-                        let hashes32: Vec<[u8; 32]> =
-                            all.iter().map(|h| *h.as_bytes()).collect();
+                        let hashes32: Vec<[u8; 32]> = all.iter().map(|h| *h.as_bytes()).collect();
                         let candidates = match main_handle
                             .spawn({
                                 let http = http.clone();
@@ -359,13 +358,12 @@ async fn main() -> Result<()> {
                     interval: std::time::Duration::from_secs(gc_interval_secs),
                     add_protected: Some(cb),
                 });
-                let store: iroh_blobs::api::Store =
-                    iroh_blobs::store::fs::FsStore::load_with_opts(
-                        blob_dir.join("blobs.db"),
-                        options,
-                    )
-                    .await?
-                        .into();
+                let store: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load_with_opts(
+                    blob_dir.join("blobs.db"),
+                    options,
+                )
+                .await?
+                .into();
                 let _ = store_cell.set(store.clone());
                 store
             };

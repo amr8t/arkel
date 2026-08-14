@@ -47,7 +47,14 @@ impl NodeRegistrar {
             "addr": self.addr.to_string(),
             "relay_url": self.relay_url,
         });
-        index_write(&self.http, &self.index_addrs, "register", &payload, &self.secret_key).await?;
+        index_write(
+            &self.http,
+            &self.index_addrs,
+            "register",
+            &payload,
+            &self.secret_key,
+        )
+        .await?;
         tracing::info!("Registered with index cluster");
         Ok(())
     }

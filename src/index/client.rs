@@ -33,16 +33,29 @@ pub async fn find_leader(http: &reqwest::Client, index_addrs: &[String]) -> Resu
 }
 
 /// Compute the Arkel auth headers (Authorization + X-Arkel-Time) for a request.
-fn auth_headers(secret_key: &iroh::SecretKey, method: &reqwest::Method,
-                path: &str, body: &[u8]) -> (String, String) {
+fn auth_headers(
+    secret_key: &iroh::SecretKey,
+    method: &reqwest::Method,
+    path: &str,
+    body: &[u8],
+) -> (String, String) {
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let payload = format!("{} {} {} {now}", method.as_str(), path,
-                          hex::encode(blake3::hash(body).as_bytes()));
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let payload = format!(
+        "{} {} {} {now}",
+        method.as_str(),
+        path,
+        hex::encode(blake3::hash(body).as_bytes())
+    );
     let sig = secret_key.sign(payload.as_bytes());
     (
-        format!("Arkel {}:{}", hex::encode(secret_key.public().as_bytes()),
-                hex::encode(sig.to_bytes())),
+        format!(
+            "Arkel {}:{}",
+            hex::encode(secret_key.public().as_bytes()),
+            hex::encode(sig.to_bytes())
+        ),
         now.to_string(),
     )
 }
@@ -97,7 +110,15 @@ pub async fn index_write(
     payload: &serde_json::Value,
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::POST, route, payload, secret_key).await
+    index_send(
+        http,
+        index_addrs,
+        reqwest::Method::POST,
+        route,
+        payload,
+        secret_key,
+    )
+    .await
 }
 
 /// PUT a write to the index cluster (used by manifest commit, `PUT /manifest/...`).
@@ -108,7 +129,15 @@ pub async fn index_put(
     payload: &serde_json::Value,
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::PUT, route, payload, secret_key).await
+    index_send(
+        http,
+        index_addrs,
+        reqwest::Method::PUT,
+        route,
+        payload,
+        secret_key,
+    )
+    .await
 }
 
 pub async fn index_read(
@@ -135,7 +164,15 @@ pub async fn index_delete(
     payload: &serde_json::Value,
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::DELETE, route, payload, secret_key).await
+    index_send(
+        http,
+        index_addrs,
+        reqwest::Method::DELETE,
+        route,
+        payload,
+        secret_key,
+    )
+    .await
 }
 
 pub struct HealthyNode {
@@ -178,7 +215,9 @@ pub async fn gc_candidates(
         &format!("shards/gc-candidates?hashes={}", query.join(",")),
     )
     .await?;
-    let arr = body.as_array().context("GET /shards/gc-candidates expected an array")?;
+    let arr = body
+        .as_array()
+        .context("GET /shards/gc-candidates expected an array")?;
     Ok(arr
         .iter()
         .filter_map(|v| v.as_str().and_then(|s| hex::decode(s).ok()))

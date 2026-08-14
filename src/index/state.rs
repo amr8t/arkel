@@ -59,7 +59,7 @@ struct StateMachineSnapshotData {
     // is exactly what a SQL dump produces.
     buckets: Vec<(String, u64, Vec<u8>)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>, // (object_hash, bucket, key, manifest, signature)
-    shard_refs: Vec<(Vec<u8>, i64)>,                              // (blob_hash, refs)
+    shard_refs: Vec<(Vec<u8>, i64)>,                             // (blob_hash, refs)
 }
 
 #[derive(Debug)]
@@ -137,14 +137,17 @@ impl StateMachineInner {
         })
     }
 
-    fn bucket_owner(tx: &rusqlite::Transaction<'_>, bucket: &str) -> Result<Option<Vec<u8>>, io::Error> {
+    fn bucket_owner(
+        tx: &rusqlite::Transaction<'_>,
+        bucket: &str,
+    ) -> Result<Option<Vec<u8>>, io::Error> {
         tx.query_row(
-        "SELECT owner FROM buckets WHERE name=?1",
-        params![bucket],
-        |r| r.get::<_, Vec<u8>>(0),
-    )
-    .optional()
-    .map_err(to_io_err)
+            "SELECT owner FROM buckets WHERE name=?1",
+            params![bucket],
+            |r| r.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(to_io_err)
     }
 
     /// Apply one command inside an already-open transaction. No fsync here —
@@ -228,7 +231,11 @@ impl StateMachineInner {
 
                 IndexNodeResponse::ok()
             }
-            IndexNodeRequest::CreateBucket { name, created_at, owner } => {
+            IndexNodeRequest::CreateBucket {
+                name,
+                created_at,
+                owner,
+            } => {
                 let existing = Self::bucket_owner(tx, &name)?;
                 match existing {
                     Some(o) if o == owner => IndexNodeResponse::ok(),
@@ -267,7 +274,11 @@ impl StateMachineInner {
                 IndexNodeResponse::batch(responses)
             }
 
-            IndexNodeRequest::DeleteManifest { bucket, key, caller } => {
+            IndexNodeRequest::DeleteManifest {
+                bucket,
+                key,
+                caller,
+            } => {
                 if Self::bucket_owner(tx, &bucket)?.as_deref() != Some(caller.as_slice()) {
                     return Ok(IndexNodeResponse::err("forbidden"));
                 }
@@ -381,7 +392,11 @@ impl ArkelStateMachine {
             .map_err(to_io_err)?;
         let buckets = buckets_stmt
             .query_map([], |r| {
-               Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, Vec<u8>>(2)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
             })
             .map_err(to_io_err)?
             .collect::<rusqlite::Result<Vec<_>>>()
@@ -662,7 +677,8 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
 
         tx.execute("DELETE FROM buckets", []).map_err(to_io_err)?;
         tx.execute("DELETE FROM manifests", []).map_err(to_io_err)?;
-        tx.execute("DELETE FROM shard_refs", []).map_err(to_io_err)?;
+        tx.execute("DELETE FROM shard_refs", [])
+            .map_err(to_io_err)?;
 
         {
             let mut bucket_stmt = tx
