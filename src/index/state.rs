@@ -56,10 +56,11 @@ fn set_busy_timeout(conn: &Connection, ms: i32) -> Result<(), io::Error> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct StateMachineSnapshotData {
     // Vec, not HashMap: row order is irrelevant for correctness, and this
-    // is exactly what a SQL dump produces.
+    // is what a SQL dump produces.
     buckets: Vec<(String, u64, Vec<u8>)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>, // (object_hash, bucket, key, manifest, signature)
     shard_refs: Vec<(Vec<u8>, i64)>,                             // (blob_hash, refs)
+    repair_operator: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
@@ -315,6 +316,101 @@ impl StateMachineInner {
                 }
             }
 
+            IndexNodeRequest::SetRepairOperator { caller } => {
+                let existing: Option<Vec<u8>> = tx
+                    .query_row(
+                        "SELECT v FROM sm_meta WHERE k = 'repair_operator'",
+                        [],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?;
+                match existing {
+                    Some(_) => IndexNodeResponse::err("repair operator already set"),
+                    None => {
+                        tx.execute(
+                            "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('repair_operator', ?1)",
+                            params![caller],
+                        )
+                        .map_err(to_io_err)?;
+                        IndexNodeResponse::ok()
+                    }
+                }
+            }
+
+            IndexNodeRequest::RepairManifest {
+                bucket,
+                key,
+                object_hash,
+                manifest_bytes,
+                caller,
+            } => {
+                // 1. Only the registered repair operator may issue repairs.
+                let operator: Option<Vec<u8>> = tx
+                    .query_row(
+                        "SELECT v FROM sm_meta WHERE k = 'repair_operator'",
+                        [],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?;
+                if operator.as_deref() != Some(caller.as_slice()) {
+                    return Ok(IndexNodeResponse::err("not repair operator"));
+                }
+                // 2. Race guard: must match the manifest the repair was based on.
+                let current: Option<Vec<u8>> = tx
+                    .query_row(
+                        "SELECT object_hash FROM manifests WHERE bucket=?1 AND key=?2",
+                        params![bucket, key],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?;
+                if current.as_deref() != Some(object_hash.as_slice()) {
+                    return Ok(IndexNodeResponse::err("stale manifest"));
+                }
+                // 3. Rebuild shard refs: decrement old manifest's shards,
+                //    increment the repaired manifest's shards.
+                let old = tx
+                    .query_row(
+                        "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
+                        params![bucket, key],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .map_err(to_io_err)?;
+                for s in crate::client::manifest::deserialize_manifest(&old)
+                    .map_err(to_io_err)?
+                    .shards
+                {
+                    tx.execute(
+                        "UPDATE shard_refs SET refs = refs - 1 WHERE blob_hash=?1 AND refs > 0",
+                        params![s.blob_hash.to_vec()],
+                    )
+                    .map_err(to_io_err)?;
+                }
+                for s in crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                    .map_err(to_io_err)?
+                    .shards
+                {
+                    tx.execute(
+                        "INSERT INTO shard_refs (blob_hash, refs) VALUES (?1, 1)
+                ON CONFLICT(blob_hash) DO UPDATE SET refs = refs + 1",
+                        params![s.blob_hash.to_vec()],
+                    )
+                    .map_err(to_io_err)?;
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                tx.execute(
+                    "INSERT OR REPLACE INTO manifests (object_hash, bucket, key, manifest, signature, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![object_hash, bucket, key, manifest_bytes, Vec::<u8>::new(), now],
+                )
+                .map_err(to_io_err)?;
+                IndexNodeResponse::ok()
+            }
+
             IndexNodeRequest::RegisterNode {
                 node_id,
                 capacity_bytes,
@@ -356,6 +452,7 @@ pub struct ArkelStateMachineSnapshot {
     buckets: Vec<(String, u64, Vec<u8>)>,
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>,
     shard_refs: Vec<(Vec<u8>, i64)>,
+    repair_operator: Option<Vec<u8>>,
     last_applied_log: Option<LogIdOf<ArkelRaftConfig>>,
     last_membership: StoredMembershipOf<ArkelRaftConfig>,
     snapshot_index: u64,
@@ -431,6 +528,15 @@ impl ArkelStateMachine {
                 .map_err(to_io_err)?
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(to_io_err)?,
+            repair_operator: sm
+                .conn
+                .query_row(
+                    "SELECT v FROM sm_meta WHERE k = 'repair_operator'",
+                    [],
+                    |r| r.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .map_err(to_io_err)?,
             last_applied_log: sm.last_applied_log.clone(),
             last_membership: sm.last_membership.clone(),
             snapshot_index: sm.snapshot_index,
@@ -487,6 +593,39 @@ impl ArkelStateMachine {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(to_io_err)?;
         Ok(keys)
+    }
+
+    /// All (bucket, key, manifest_bytes) — the repair scan source.
+    pub async fn list_all_manifests(&self) -> Result<Vec<(String, String, Vec<u8>)>, io::Error> {
+        let sm = self.inner.lock().await;
+        let mut stmt = sm
+            .conn
+            .prepare_cached("SELECT bucket, key, manifest FROM manifests")
+            .map_err(to_io_err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })
+            .map_err(to_io_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(to_io_err)?;
+        Ok(rows)
+    }
+
+    /// All registered nodes with their health status — the repair health map.
+    pub async fn list_all_nodes(
+        &self,
+    ) -> Result<Vec<(Vec<u8>, String, Option<String>, NodeStatus)>, io::Error> {
+        let sm = self.inner.lock().await;
+        Ok(sm
+            .node_registry
+            .iter()
+            .map(|(id, ns)| (id.clone(), ns.addr.clone(), ns.relay_url.clone(), ns.status.clone()))
+            .collect())
     }
 
     /// Which of the given shard blob hashes are referenced by no live
@@ -714,6 +853,13 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
                 stmt.execute(params![blob_hash, refs]).map_err(to_io_err)?;
             }
         }
+        if let Some(ref op) = snap_data.repair_operator {
+            tx.execute(
+                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('repair_operator', ?1)",
+                params![op],
+            )
+            .map_err(to_io_err)?;
+        }
 
         let log_bytes = meta.last_log_id.as_ref().map(cbor_to_io).transpose()?;
         if let Some(bytes) = log_bytes {
@@ -762,6 +908,7 @@ impl RaftSnapshotBuilder<ArkelRaftConfig> for ArkelStateMachine {
             buckets: snapshot.buckets,
             manifests: snapshot.manifests,
             shard_refs: snapshot.shard_refs,
+            repair_operator: snapshot.repair_operator,
         };
         let data = cbor_to_io(&snap_data)?;
 

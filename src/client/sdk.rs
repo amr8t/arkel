@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::dataplane::{self, DataPlaneConfig, StorageTarget};
+use crate::dataplane::{self, DataPlaneConfig, ErasureConfig, StorageTarget};
 
 /// Client-facing alias for the shared data-plane config.
 pub use crate::dataplane::DataPlaneConfig as ClientConfig;
@@ -68,5 +68,30 @@ impl Client {
 
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
         dataplane::delete(&self.cfg, bucket, key).await
+    }
+
+    pub async fn repair_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        object_hash: [u8; 32],
+        ciphertext_size: u64,
+        original_size: u64,
+        shards: Vec<Vec<u8>>,
+        target: ErasureConfig,
+    ) -> Result<String> {
+        dataplane::repair_object(
+            &self.cfg,
+            &self.endpoint,
+            &self.store,
+            bucket,
+            key,
+            object_hash,
+            ciphertext_size,
+            original_size,
+            shards,
+            target,
+        )
+        .await
     }
 }

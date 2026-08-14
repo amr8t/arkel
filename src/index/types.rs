@@ -28,6 +28,16 @@ pub enum IndexNodeRequest {
         key: String,
         caller: Vec<u8>,
     },
+    SetRepairOperator {
+        caller: Vec<u8>,
+    },
+    RepairManifest {
+        bucket: String,
+        key: String,
+        object_hash: Vec<u8>,
+        manifest_bytes: Vec<u8>,
+        caller: Vec<u8>,
+    },
     Batch(Vec<IndexNodeRequest>),
     RegisterNode {
         node_id: Vec<u8>,
@@ -54,6 +64,12 @@ impl fmt::Display for IndexNodeRequest {
             }
             IndexNodeRequest::DeleteManifest { bucket, key, .. } => {
                 write!(f, "DeleteManifest({}, {})", bucket, key)
+            }
+            IndexNodeRequest::SetRepairOperator { .. } => {
+                write!(f, "SetRepairOperator")
+            }
+            IndexNodeRequest::RepairManifest { object_hash, .. } => {
+                write!(f, "RepairManifest({})", hex::encode(object_hash))
             }
             IndexNodeRequest::Batch(entries) => write!(f, "Batch({} entries)", entries.len()),
             IndexNodeRequest::RegisterNode { node_id, .. } => {

@@ -337,6 +337,77 @@ pub async fn assign_shards(cfg: &DataPlaneConfig) -> Result<(ErasureConfig, Vec<
     Ok((ec, targets))
 }
 
+pub fn reencode(
+    available: &[Option<&[u8]>],
+    from: ErasureConfig,
+    ciphertext_len: usize,
+    to: ErasureConfig,
+) -> Result<Vec<Vec<u8>>> {
+    let ciphertext = decode(available, &from, ciphertext_len)?;
+    encode(&ciphertext, &to)
+}
+
+pub async fn repair_object(
+    cfg: &DataPlaneConfig,
+    endpoint: &iroh::Endpoint,
+    store: &iroh_blobs::api::Store,
+    bucket: &str,
+    key: &str,
+    object_hash: [u8; 32],
+    ciphertext_size: u64,
+    original_size: u64,
+    shards: Vec<Vec<u8>>,
+    target: ErasureConfig,
+) -> Result<String> {
+    let (_, targets) = assign_shards(cfg).await?;
+    if targets.is_empty() {
+        bail!("no storage targets to distribute shards to");
+    }
+    // Host new shards locally and pull to the assigned nodes (same as put).
+    let mut shard_hashes = Vec::new();
+    let mut temp_tags = Vec::new();
+    for shard in &shards {
+        let tag = store.blobs().add_bytes(shard.to_vec()).temp_tag().await?;
+        shard_hashes.push(tag.hash());
+        temp_tags.push(tag);
+    }
+    for (i, blob_hash) in shard_hashes.iter().enumerate() {
+        let target = &targets[i % targets.len()];
+        pull_shard(endpoint, target, *blob_hash).await?;
+    }
+    let placements: Vec<ShardPlacement> = shard_hashes
+        .iter()
+        .enumerate()
+        .map(|(i, h)| ShardPlacement {
+            shard_index: i as u8,
+            node_id: targets[i % targets.len()].node_id,
+            blob_hash: *h.as_bytes(),
+        })
+        .collect();
+    let manifest = Manifest {
+        bucket: bucket.into(),
+        key: key.into(),
+        object_hash,
+        original_size,
+        ciphertext_size,
+        k: target.k as u8,
+        m: target.m as u8,
+        shards: placements,
+    };
+    let manifest_bytes = serialize_manifest(&manifest)?;
+    crate::index::client::repair_commit(
+        &cfg.http,
+        &cfg.index_addrs,
+        &format!("manifest/{bucket}/{key}/repair"),
+        &serde_json::json!({
+            "object_hash": object_hash.to_vec(),
+            "manifest_bytes": manifest_bytes,
+        }),
+        &cfg.secret_key,
+    )
+    .await?;
+    Ok(etag_from_hash(&object_hash))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

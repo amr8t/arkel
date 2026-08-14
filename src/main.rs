@@ -70,6 +70,24 @@ enum Commands {
         #[command(subcommand)]
         cmd: ClientCmd,
     },
+    /// Heal objects below target k/m (standalone, idempotent; run by cron)
+    Repair {
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+        /// Register this identity as the repair operator (one-time), then exit
+        #[arg(long)]
+        register: bool,
+        /// Re-encode target data shards (default 4)
+        #[arg(long, default_value_t = 4)]
+        k: u8,
+        /// Re-encode target parity shards (default 2)
+        #[arg(long, default_value_t = 2)]
+        m: u8,
+        /// Max objects fixed per run (rate limit)
+        #[arg(long, default_value_t = 600)]
+        rate_limit: usize,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -216,6 +234,27 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
     result
 }
 
+async fn run_repair(
+    base_dir: PathBuf,
+    identity: &NodeIdentity,
+    index_addrs: Vec<String>,
+    register: bool,
+    ec_config: ErasureConfig,
+    rate_limit: usize,
+) -> Result<()> {
+    let store_dir = base_dir.join("blobs");
+    let cfg = ClientConfig {
+        index_addrs,
+        secret_key: identity.secret_key().clone(),
+        ec_config,
+        http: reqwest::Client::new(),
+    };
+    let client = ArkelClient::new(cfg, store_dir).await?;
+    let result = arkel::repair::run(&client, register, rate_limit).await;
+    client.endpoint.close().await;
+    result
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -227,6 +266,7 @@ async fn main() -> Result<()> {
             Commands::Index { http_addr, .. } => format!("index_{}", http_addr.port()),
             Commands::Storage { .. } => "storage".to_string(),
             Commands::Client { .. } => "client".to_string(),
+            Commands::Repair { .. } => "repair".to_string(),
         };
         PathBuf::from(format!("./.arkel_{suffix}_data"))
     });
@@ -236,6 +276,23 @@ async fn main() -> Result<()> {
 
     let mode = match cli.command {
         Commands::Client { cmd } => return run_client(base_dir, &arkel.identity, cmd).await,
+        Commands::Repair {
+            index_addrs,
+            register,
+            k,
+            m,
+            rate_limit,
+        } => {
+            return run_repair(
+                base_dir,
+                &arkel.identity,
+                index_addrs,
+                register,
+                ErasureConfig { k: k as usize, m: m as usize },
+                rate_limit,
+            )
+            .await
+        }
         Commands::Index {
             http_addr,
             peer_addresses,

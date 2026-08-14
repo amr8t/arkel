@@ -223,3 +223,73 @@ pub async fn gc_candidates(
         .filter_map(|v| v.as_str().and_then(|s| hex::decode(s).ok()))
         .collect())
 }
+
+/// All (bucket, key, manifest_bytes) — the repair scan source.
+pub async fn list_all_manifests(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+) -> Result<Vec<(String, String, Vec<u8>)>> {
+    let body = index_read(http, index_addrs, "manifests").await?;
+    let arr = body.as_array().context("GET /manifests expected an array")?;
+    arr.iter()
+        .map(|v| {
+            Ok((
+                v[0].as_str().context("bad bucket")?.to_string(),
+                v[1].as_str().context("bad key")?.to_string(),
+                serde_json::from_value(v[2].clone()).context("bad manifest_bytes")?,
+            ))
+        })
+        .collect()
+}
+
+/// Signed POST to the repair route (re-commits a repaired manifest).
+pub async fn repair_commit(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    route: &str,
+    payload: &serde_json::Value,
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    index_send(http, index_addrs, reqwest::Method::POST, route, payload, secret_key).await
+}
+
+/// One-time registration of this identity as the repair operator.
+pub async fn set_repair_operator(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    index_write(
+        http,
+        index_addrs,
+        "repair-operator",
+        &serde_json::json!({}),
+        secret_key,
+    )
+    .await
+}
+
+pub struct NodeStatusInfo {
+    pub node_id: iroh::PublicKey,
+    pub addr: SocketAddr,
+    pub relay_url: Option<String>,
+    pub offline: bool,
+}
+/// All registered nodes with their Online/Offline status (repair health map).
+pub async fn list_all_nodes(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+) -> Result<Vec<NodeStatusInfo>> {
+    let body = index_read(http, index_addrs, "nodes/all").await?;
+    let arr = body.as_array().context("GET /nodes/all expected an array")?;
+    arr.iter()
+        .map(|n| {
+            Ok(NodeStatusInfo {
+                node_id: n["node_id"].as_str().context("missing node_id")?.parse()?,
+                addr: n["addr"].as_str().context("missing addr")?.parse()?,
+                relay_url: n["relay_url"].as_str().and_then(|s| s.parse().ok()),
+                offline: n["status"].as_str() == Some("Offline"),
+            })
+        })
+        .collect()
+}

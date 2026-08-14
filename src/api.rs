@@ -143,6 +143,10 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/register", post(register_node))
         .route("/nodes", get(list_nodes))
+        .route("/nodes/all", get(list_all_nodes))
+        .route("/manifests", get(list_manifests))
+        .route("/repair-operator", post(set_repair_operator))
+        .route("/manifest/:bucket/:key/repair", post(repair_manifest))
         .route("/shards/gc-candidates", get(gc_candidates))
 }
 
@@ -284,6 +288,81 @@ async fn commit_manifest(
     }
 }
 
+async fn repair_manifest(
+    State(state): State<Arc<AppState>>,
+    Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request(
+        "POST",
+        &format!("manifest/{bucket}/{key}/repair"),
+        &body,
+        &headers,
+    ) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    let payload: CommitManifestPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(IndexNodeResponse::err(&e.to_string())),
+            )
+                .into_response();
+        }
+    };
+    let cmd = IndexNodeRequest::RepairManifest {
+        bucket,
+        key,
+        object_hash: payload.object_hash,
+        manifest_bytes: payload.manifest_bytes,
+        caller: caller.as_bytes().to_vec(),
+    };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
+    }
+}
+
+async fn set_repair_operator(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller =
+        match crate::index::auth::verify_request("POST", "repair-operator", &body, &headers) {
+            Ok(pk) => pk,
+            Err(e) => {
+                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
+                    .into_response();
+            }
+        };
+    let cmd = IndexNodeRequest::SetRepairOperator {
+        caller: caller.as_bytes().to_vec(),
+    };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
+    }
+}
+
+async fn list_manifests(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.state_machine.list_all_manifests().await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct RegisterNodePayload {
     pub node_id: Vec<u8>,
@@ -369,6 +448,27 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
                     node_id: hex::encode(node_id),
                     addr,
                     relay_url,
+                })
+                .collect();
+            Json(nodes).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// All registered nodes with their Online/Offline status — repair's health map.
+async fn list_all_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.state_machine.list_all_nodes().await {
+        Ok(nodes) => {
+            let nodes: Vec<_> = nodes
+                .into_iter()
+                .map(|(node_id, addr, relay_url, status)| {
+                    serde_json::json!({
+                        "node_id": hex::encode(node_id),
+                        "addr": addr,
+                        "relay_url": relay_url,
+                        "status": status,
+                    })
                 })
                 .collect();
             Json(nodes).into_response()

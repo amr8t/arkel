@@ -13,6 +13,7 @@ pub mod client;
 pub mod dataplane;
 pub mod identity;
 pub mod index;
+pub mod repair;
 pub mod storage;
 
 /// Index-node cluster seed addresses.
@@ -310,7 +311,7 @@ async fn run_index_node(
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|(_, last)| current.saturating_sub(*last) > 50) // LAG_THRESHOLD
+                .filter(|(_, last)| current.saturating_sub(*last) > 5) // LAG_THRESHOLD
                 .map(|(id, _)| id)
                 .collect();
             if !stale.is_empty() {
