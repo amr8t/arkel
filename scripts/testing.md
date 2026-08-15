@@ -1,32 +1,50 @@
-# 1. Start a fresh 3-node cluster
-python scripts/run_nodes.py start --fresh
+# Arkel testing
 
-# 2. Add demo bucket + object (use whichever port is leader)
-curl -X PUT http://127.0.0.1:8001/demo
-curl -X PUT http://127.0.0.1:8001/demo/hello.txt -d "hello"
+## Cluster lifecycle (`scripts/run_nodes.py`)
 
-# 3. Kill node 1
-python scripts/run_nodes.py kill --port 8001
+Start a fresh cluster (3 index nodes 8001-8003 + 3 storage nodes 9001-9003):
 
-# 4. Wipe node 1's data but keep its identity
-python scripts/run_nodes.py wipe --port 8001
+    python scripts/run_nodes.py start --fresh
 
-# 5. Bring the same node 1 back up (uses saved identity + peers)
-python scripts/run_nodes.py start --port 8001
+Per-node index lifecycle (state is wiped but preserve the identity):
 
-# 6. Wipe all nodes' state (keeps identities)
-python scripts/run_nodes.py wipe --all
+    python scripts/run_nodes.py kill --port 8001    # stop one node
+    python scripts/run_nodes.py wipe --port 8001    # wipe its state, keep identity
+    python scripts/run_nodes.py start --port 8001   # rejoin using saved identity + peers
+    python scripts/run_nodes.py wipe --all          # wipe all index state
+    python scripts/run_nodes.py clean               # stop everything + delete data/logs
 
-# --- Performance testing ---
+Demo data — the index API is **signed** (access control), so use the CLI, not curl:
 
-# 7. Basic perf run (2k steady, 10x burst)
-python scripts/run_nodes.py run --performance
+    cargo build
+    ./target/debug/arkel client put hello.txt --bucket demo          # key defaults to filename
+    ./target/debug/arkel client get demo hello.txt
+    ./target/debug/arkel client rm demo hello.txt
 
-# 8. Find max sustainable throughput ceiling
-python scripts/run_nodes.py run --performance --perf-find-ceiling
+## Performance (`run --performance`)
 
-# 9. Simulate 10ms latency with 3ms jitter between nodes (requires sudo)
-python scripts/run_nodes.py run --performance --perf-latency-ms 10 --perf-jitter-ms 3
+Steady-state (~2k writes/s) + 10x burst against the Raft leader:
 
-# 10. Find ceiling under realistic network conditions
-python scripts/run_nodes.py run --performance --perf-find-ceiling --perf-latency-ms 10 --perf-jitter-ms 3
+    python scripts/run_nodes.py run --performance
+    # tune: --perf-duration, --perf-concurrency, --perf-burst, --perf-target-rate
+
+Network emulation (tc-netem on loopback, requires sudo):
+
+    python scripts/run_nodes.py run --performance --perf-latency-ms 10 --perf-jitter-ms 3
+
+
+## Smoke scenarios (`run_nodes.py smoke <name>`)
+
+    basic    put→get roundtrip
+    delete   rm + shard GC
+    access   two-identity authz (B can't rm/overwrite A's object)
+    parity   kill a storage node, EC recovers
+    quorum   kill an index node, Raft 2/3
+    relay    NAT'd node's shards pulled via relay
+    repair   kill a node → repair re-encodes/redistributes
+    perf     throughput benchmark
+
+Run all:
+
+    for s in basic delete access parity quorum relay repair; do \
+      python scripts/run_nodes.py smoke $s; done
