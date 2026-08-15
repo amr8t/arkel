@@ -1,7 +1,7 @@
 //! Shared data-plane pipeline (EC + encrypt + reconstruct).
 //!
 //! This is the single implementation of the object pipeline. It is used by the
-//! client SDK (`client::sdk`, which does EC + encrypt locally and talks
+//! client library (`client`, which does EC + encrypt locally and talks
 //! iroh-blobs QUIC) and will be reused by the M6 S3-proxy gateway (which runs
 //! the same functions server-side for tools that can't speak iroh-blobs).
 //! Keeping the pipeline here means both callers share one implementation and

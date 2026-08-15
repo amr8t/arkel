@@ -230,7 +230,9 @@ pub async fn list_all_manifests(
     index_addrs: &[String],
 ) -> Result<Vec<(String, String, Vec<u8>)>> {
     let body = index_read(http, index_addrs, "manifests").await?;
-    let arr = body.as_array().context("GET /manifests expected an array")?;
+    let arr = body
+        .as_array()
+        .context("GET /manifests expected an array")?;
     arr.iter()
         .map(|v| {
             Ok((
@@ -250,7 +252,15 @@ pub async fn repair_commit(
     payload: &serde_json::Value,
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    index_send(http, index_addrs, reqwest::Method::POST, route, payload, secret_key).await
+    index_send(
+        http,
+        index_addrs,
+        reqwest::Method::POST,
+        route,
+        payload,
+        secret_key,
+    )
+    .await
 }
 
 /// One-time registration of this identity as the repair operator.
@@ -281,7 +291,9 @@ pub async fn list_all_nodes(
     index_addrs: &[String],
 ) -> Result<Vec<NodeStatusInfo>> {
     let body = index_read(http, index_addrs, "nodes/all").await?;
-    let arr = body.as_array().context("GET /nodes/all expected an array")?;
+    let arr = body
+        .as_array()
+        .context("GET /nodes/all expected an array")?;
     arr.iter()
         .map(|n| {
             Ok(NodeStatusInfo {

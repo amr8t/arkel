@@ -1,19 +1,105 @@
 pub mod encrypt;
 pub mod manifest;
-pub mod sdk;
 
-// TODO: add these once encrypt.rs is implemented:
-// pub use encrypt::{decrypt_shard, derive_key, encrypt_shard};
+use anyhow::Result;
+use std::path::PathBuf;
 
-// TODO: uncomment once encrypt.rs AND gateway/erasure are available
-// use crate::dataplane::ErasureConfig;
-//
-// pub struct PreparedUpload {
-//     pub object_hash: blake3::Hash,
-//     pub encrypted_shards: Vec<Vec<u8>>,
-//     pub ec_config: ErasureConfig,
-//     pub original_len: usize,
-// }
-//
-// pub fn prepare_upload(data: &[u8], ec_config: ErasureConfig, master_key: &[u8; 32]) -> Result<PreparedUpload> { ... }
-// pub fn reconstruct_object(shards: &[Option<Vec<u8>>], ec_config: &ErasureConfig, master_key: &[u8; 32], object_hash: &blake3::Hash, original_len: usize) -> Result<Vec<u8>> { ... }
+use crate::dataplane::{self, DataPlaneConfig, ErasureConfig, StorageTarget};
+
+/// Client-facing alias for the shared data-plane config.
+pub use crate::dataplane::DataPlaneConfig as ClientConfig;
+
+/// The arkel client library: bundles the shared data-plane config with an
+/// iroh runtime (ephemeral endpoint + blob store). This is the embeddable,
+/// programmatic interface (CLI and future gateway/adapters build on it).
+pub struct Client {
+    pub cfg: DataPlaneConfig,
+    pub endpoint: iroh::Endpoint,
+    pub store: iroh_blobs::api::Store,
+    pub router: iroh::protocol::Router,
+}
+
+impl Client {
+    /// Build the iroh runtime: endpoint + blob store + blobs router (so
+    /// storage nodes can pull shards from us, pull-based put). Reused by the
+    /// M6 gateway, which runs the same runtime for its proxy path.
+    pub async fn new(cfg: DataPlaneConfig, store_dir: PathBuf) -> Result<Self> {
+        let secret_key = cfg.secret_key.clone();
+        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .relay_mode(iroh::endpoint::RelayMode::Default)
+            .secret_key(secret_key)
+            .bind()
+            .await?;
+        let store: iroh_blobs::api::Store = iroh_blobs::store::fs::FsStore::load(&store_dir)
+            .await?
+            .into();
+        // Serve blobs locally so storage nodes can pull shards from us (pull-based put).
+        let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
+        let router = iroh::protocol::Router::builder(endpoint.clone())
+            .accept(iroh_blobs::ALPN, blobs)
+            .spawn();
+        Ok(Self {
+            cfg,
+            endpoint,
+            store,
+            router,
+        })
+    }
+
+    pub async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: &[u8],
+        targets: &[StorageTarget],
+    ) -> Result<String> {
+        dataplane::put(
+            &self.cfg,
+            targets,
+            &self.endpoint,
+            &self.store,
+            bucket,
+            key,
+            data,
+        )
+        .await
+    }
+
+    pub async fn get_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        targets: &[StorageTarget],
+    ) -> Result<Vec<u8>> {
+        dataplane::get(&self.cfg, targets, &self.endpoint, &self.store, bucket, key).await
+    }
+
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
+        dataplane::delete(&self.cfg, bucket, key).await
+    }
+
+    pub async fn repair_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        object_hash: [u8; 32],
+        ciphertext_size: u64,
+        original_size: u64,
+        shards: Vec<Vec<u8>>,
+        target: ErasureConfig,
+    ) -> Result<String> {
+        dataplane::repair_object(
+            &self.cfg,
+            &self.endpoint,
+            &self.store,
+            bucket,
+            key,
+            object_hash,
+            ciphertext_size,
+            original_size,
+            shards,
+            target,
+        )
+        .await
+    }
+}

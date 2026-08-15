@@ -624,7 +624,14 @@ impl ArkelStateMachine {
         Ok(sm
             .node_registry
             .iter()
-            .map(|(id, ns)| (id.clone(), ns.addr.clone(), ns.relay_url.clone(), ns.status.clone()))
+            .map(|(id, ns)| {
+                (
+                    id.clone(),
+                    ns.addr.clone(),
+                    ns.relay_url.clone(),
+                    ns.status.clone(),
+                )
+            })
             .collect())
     }
 

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use arkel::{
     Arkel, BootstrapConfig, NodeMode,
-    client::sdk::{Client as ArkelClient, ClientConfig},
+    client::{Client as ArkelClient, ClientConfig},
     dataplane::{ErasureConfig, StorageTarget},
     identity::NodeIdentity,
 };
@@ -288,10 +288,13 @@ async fn main() -> Result<()> {
                 &arkel.identity,
                 index_addrs,
                 register,
-                ErasureConfig { k: k as usize, m: m as usize },
+                ErasureConfig {
+                    k: k as usize,
+                    m: m as usize,
+                },
                 rate_limit,
             )
-            .await
+            .await;
         }
         Commands::Index {
             http_addr,

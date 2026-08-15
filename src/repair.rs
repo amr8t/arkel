@@ -10,7 +10,7 @@ use iroh::PublicKey;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::client::sdk::Client as ArkelClient;
+use crate::client::Client as ArkelClient;
 use crate::dataplane::{ErasureConfig, reencode};
 use crate::index::client;
 use crate::storage::blob::get_blob;
@@ -19,11 +19,7 @@ use crate::storage::blob::get_blob;
 ///
 /// `register = true` registers this identity as the repair operator (one-time)
 /// and exits. Otherwise it scans and repairs up to `rate_limit` objects.
-pub async fn run(
-    client: &ArkelClient,
-    register: bool,
-    rate_limit: usize,
-) -> Result<()> {
+pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Result<()> {
     let cfg = &client.cfg;
     let http = &cfg.http;
     let index_addrs = &cfg.index_addrs;
@@ -91,7 +87,10 @@ pub async fn run(
         // actual shard count (same discipline as put()).
         let (effective, _) = crate::dataplane::assign_shards(cfg).await?;
         let refs: Vec<Option<&[u8]>> = slots.iter().map(|o| o.as_deref()).collect();
-        let from = ErasureConfig { k: m.k as usize, m: m.m as usize };
+        let from = ErasureConfig {
+            k: m.k as usize,
+            m: m.m as usize,
+        };
         let new_shards = reencode(&refs, from, m.ciphertext_size as usize, effective)
             .context("re-encode failed")?;
         client
