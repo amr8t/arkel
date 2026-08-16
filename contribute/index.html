@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contribute to the network — Arkel</title>
+  <link rel="stylesheet" href="https://amr8t.github.io/arkelstore/style.css">
+</head>
+<body>
+  <header>
+    <nav>
+      <span class="brand"><a href="https://amr8t.github.io/arkelstore">Arkel</a></span>
+      <a href="https://amr8t.github.io/arkelstore/cli">CLI</a>
+      <a href="https://amr8t.github.io/arkelstore/contribute">Contribute</a>
+    </nav>
+  </header>
+  <main>
+    
+  <h1>Contribute to the network</h1>
+  <h2 id="1-as-an-operator-run-a-storage-node">1. As an operator — run a storage node</h2>
+<p>Running a storage node contributes its disk to the network. It registers with
+the index, stores encrypted shards for others, and a background GC loop frees
+shards that are no longer referenced.</p>
+<pre><code data-lang="sh">arkel storage \
+  --addr 0.0.0.0:9001 \
+  --index-addrs http://index.example:8001 \
+  --data-dir /var/lib/arkel/storage
+</code></pre>
+<ul>
+<li><code>--addr</code> — the QUIC endpoint to bind (default <code>127.0.0.1:9001</code>)</li>
+<li><code>--index-addrs</code> — index node URLs to register against</li>
+<li>Identity is auto-generated on first boot into <code>--data-dir/identity.key</code>.</li>
+</ul>
+<p>Erasure coding means the network survives node failures — your node just stores
+encrypted shards, and no single node holds your data in the clear.</p>
+<blockquote>
+<p><strong>Planned</strong> get credited for contributing storage to the network</p>
+</blockquote>
+<h2 id="2-as-a-user-buy-credits">2. As a user — buy credits</h2>
+<blockquote>
+<p><strong>Planned</strong> `buy credits for increasing usage limits.</p>
+</blockquote>
+
+
+  </main>
+  <footer>
+    <p>Arkel — <a href="https://github.com/amr8t/arkelstore">source</a></p>
+  </footer>
+</body>
+</html>

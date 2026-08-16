@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arkel — Decentralized erasure-coded storage network</title>
+  <link rel="stylesheet" href="https://amr8t.github.io/arkelstore/style.css">
+</head>
+<body>
+  <header>
+    <nav>
+      <span class="brand"><a href="https://amr8t.github.io/arkelstore">Arkel</a></span>
+      <a href="https://amr8t.github.io/arkelstore/cli">CLI</a>
+      <a href="https://amr8t.github.io/arkelstore/contribute">Contribute</a>
+    </nav>
+  </header>
+  <main>
+    
+  <h1 id="arkel">Arkel</h1>
+<p>Arkel is a community platform for object storage. Node operators contribute storage in exchange for credit (USDC) and users can pay to use object storage. Arkel aims to be community driven as opposed to cloud providers that are purely profit driven.</p>
+<p>More details on technical architecture coming soon. Checkout the <a rel="external" href="https://github.com/amr8t/arkelstore">SourceCode</a>:</p>
+<h2 id="get-started">Get started</h2>
+<h3 id="as-an-operator">As an operator</h3>
+<p>Run a <strong>storage node</strong> — contribute disk, get quota:</p>
+<pre><code data-lang="sh">arkel storage \
+  --addr 0.0.0.0:9001 \
+  --index-addrs http://index.example:8001 \
+  --data-dir /var/lib/arkel/storage
+</code></pre>
+<p>Run an <strong>index node</strong> (part of the Raft quorum):</p>
+<pre><code data-lang="sh">arkel index \
+  --http-addr 0.0.0.0:8001 \
+  --peer-addresses &lt;pubkey@ip:port,...&gt;
+</code></pre>
+<h3 id="as-a-user">As a user</h3>
+<pre><code data-lang="sh"># put
+arkel client put photo.jpg --bucket media --key holidays/1.jpg
+
+# get
+arkel client get media holidays/1.jpg --output photo.jpg
+
+# rm
+arkel client rm media holidays/1.jpg
+</code></pre>
+<p>See the <a href="/cli/">CLI reference</a> for the full command surface.</p>
+<p>Want to earn storage quota in exchange for contributing disk?
+See <a href="/contribute/">Contribute</a>.</p>
+
+
+  </main>
+  <footer>
+    <p>Arkel — <a href="https://github.com/amr8t/arkelstore">source</a></p>
+  </footer>
+</body>
+</html>
