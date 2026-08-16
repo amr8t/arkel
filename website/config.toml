@@ -1,0 +1,12 @@
+# Zola static site config — gh-pages ready.
+# Build: `zola build`  (outputs ./public; commit that to gh-pages branch or
+# deploy via GitHub Actions: peaceiris/actions-gh-pages).
+
+base_url = "https://amr8t.github.io/arkelstore/"
+title = "Arkel"
+description = "Decentralized erasure-coded storage network"
+generate_feeds = false
+build_search_index = false
+generate_sitemap = true
+
+[markdown]

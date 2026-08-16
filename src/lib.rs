@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 
 pub mod api;
+pub mod cli;
 pub mod client;
 pub mod dataplane;
 pub mod identity;

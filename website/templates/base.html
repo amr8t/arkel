@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }} — {{ config.description }}{% endblock title %}</title>
+  <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+</head>
+<body>
+  <header>
+    <nav>
+      <span class="brand"><a href="{{ get_url(path='/') }}">{{ config.title }}</a></span>
+      <a href="{{ get_url(path='/cli/') }}">CLI</a>
+      <a href="{{ get_url(path='/contribute/') }}">Contribute</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock content %}
+  </main>
+  <footer>
+    <p>Arkel — <a href="https://github.com/amr8t/arkelstore">source</a></p>
+  </footer>
+</body>
+</html>

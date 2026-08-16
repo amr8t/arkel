@@ -1,0 +1,26 @@
+name: Release
+
+# Cut a release:
+#   cargo install cargo-edit
+#   cargo set-version 0.2.0
+#   git commit -am "v0.2.0" && git tag v0.2.0 && git push --tags
+# Pushing the tag builds the release binary and publishes it to GitHub Releases.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/arkel
