@@ -25,6 +25,11 @@ This document contains the help content for the `arkel` command-line program.
 * [`arkel client put`↴](#arkel-client-put)
 * [`arkel client get`↴](#arkel-client-get)
 * [`arkel client rm`↴](#arkel-client-rm)
+* [`arkel account`↴](#arkel-account)
+* [`arkel account quota`↴](#arkel-account-quota)
+* [`arkel payment`↴](#arkel-payment)
+* [`arkel payment register`↴](#arkel-payment-register)
+* [`arkel payment credit`↴](#arkel-payment-credit)
 * [`arkel repair`↴](#arkel-repair)
 
 ## `arkel`
@@ -37,6 +42,8 @@ Arkel Distributed Blob Index & Storage Node
 
 * `storage` — Boot up as a high-throughput raw block storage endpoint
 * `client` — Upload/download objects as an iroh-native client
+* `account` — Account & quota tools
+* `payment` — Payment-operator tooling (register the quota credit key; first-wins)
 * `repair` — Heal objects below target k/m (standalone, idempotent; run by cron)
 
 ###### **Options:**
@@ -138,6 +145,80 @@ Delete an object (removes its manifest via Raft; shards freed by GC)
 
 ###### **Options:**
 
+* `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs (comma-separated)
+
+  Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`
+
+
+
+## `arkel account`
+
+Account & quota tools
+
+**Usage:** `arkel account <COMMAND>`
+
+###### **Subcommands:**
+
+* `quota` — Show quota and usage for an account (default: this identity)
+
+
+
+## `arkel account quota`
+
+Show quota and usage for an account (default: this identity)
+
+**Usage:** `arkel account quota [OPTIONS]`
+
+###### **Options:**
+
+* `--account <ACCOUNT>` — Account (hex iroh pubkey); defaults to this node's identity
+* `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs (comma-separated)
+
+  Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`
+
+
+
+## `arkel payment`
+
+Payment-operator tooling (register the quota credit key; first-wins)
+
+**Usage:** `arkel payment <COMMAND>`
+
+###### **Subcommands:**
+
+* `register` — Register this identity as the payment operator (one-time, first-wins)
+* `credit` — Credit quota to an account (idempotent on --ref-id)
+
+
+
+## `arkel payment register`
+
+Register this identity as the payment operator (one-time, first-wins)
+
+**Usage:** `arkel payment register [OPTIONS]`
+
+###### **Options:**
+
+* `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs (comma-separated)
+
+  Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`
+
+
+
+## `arkel payment credit`
+
+Credit quota to an account (idempotent on --ref-id)
+
+**Usage:** `arkel payment credit [OPTIONS] --account <ACCOUNT> --bytes <BYTES> --ref-id <REF_ID>`
+
+###### **Options:**
+
+* `--account <ACCOUNT>` — Account (hex iroh pubkey) to credit
+* `--bytes <BYTES>` — Bytes of quota to add
+* `--source <SOURCE>` — Credit source label (e.g. 'payment')
+
+  Default value: `payment`
+* `--ref-id <REF_ID>` — Idempotency reference (e.g. Stripe checkout id); replay is a no-op
 * `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs (comma-separated)
 
   Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`

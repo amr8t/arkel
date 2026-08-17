@@ -61,6 +61,9 @@ struct StateMachineSnapshotData {
     manifests: Vec<(Vec<u8>, String, String, Vec<u8>, Vec<u8>)>, // (object_hash, bucket, key, manifest, signature)
     shard_refs: Vec<(Vec<u8>, i64)>,                             // (blob_hash, refs)
     repair_operator: Option<Vec<u8>>,
+    payment_operator: Option<Vec<u8>>,
+    quota: Vec<(String, i64, i64)>, // (account_id, total, used)
+    quota_events: Vec<(String, String, String, i64, i64)>, // (source, ref_id, account_id, bytes, applied_at)
 }
 
 #[derive(Debug)]
@@ -95,6 +98,20 @@ const SM_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS shard_refs (
         blob_hash BLOB PRIMARY KEY,
         refs INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS quota (
+        account_id TEXT PRIMARY KEY,
+        total_bytes INTEGER NOT NULL DEFAULT 0,
+        used_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS quota_events (
+        source TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        applied_at INTEGER NOT NULL,
+        PRIMARY KEY (source, ref_id)
     );
 ";
 
@@ -151,6 +168,53 @@ impl StateMachineInner {
         .map_err(to_io_err)
     }
 
+    fn quota_row(
+        tx: &rusqlite::Transaction<'_>,
+        account: &str,
+    ) -> Result<Option<(i64, i64)>, io::Error> {
+        tx.query_row(
+            "SELECT total_bytes, used_bytes FROM quota WHERE account_id=?1",
+            params![account],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(to_io_err)
+    }
+
+    /// Debit `bytes` from `account`; false if a quota exists and it's exceeded.
+    fn try_debit(
+        tx: &rusqlite::Transaction<'_>,
+        account: &str,
+        bytes: i64,
+    ) -> Result<bool, io::Error> {
+        let (total, used) = Self::quota_row(tx, account)?.unwrap_or((0, 0));
+        if total > 0 && used + bytes > total {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO quota (account_id, total_bytes, used_bytes, created_at)
+             VALUES (?1, 0, ?2, 0)
+             ON CONFLICT(account_id) DO UPDATE SET used_bytes = used_bytes + ?2",
+            params![account, bytes],
+        )
+        .map_err(to_io_err)?;
+        Ok(true)
+    }
+
+    /// Release `bytes` back to `account` (floor 0).
+    fn release(
+        tx: &rusqlite::Transaction<'_>,
+        account: &str,
+        bytes: i64,
+    ) -> Result<(), io::Error> {
+        tx.execute(
+            "UPDATE quota SET used_bytes = MAX(used_bytes - ?2, 0) WHERE account_id=?1",
+            params![account, bytes],
+        )
+        .map_err(to_io_err)?;
+        Ok(())
+    }
+
     /// Apply one command inside an already-open transaction. No fsync here —
     /// the caller commits once for the whole batch.
     ///
@@ -183,9 +247,18 @@ impl StateMachineInner {
                         return Ok(IndexNodeResponse::err("forbidden"));
                     }
                 }
+                let new_manifest =
+                    crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                        .map_err(to_io_err)?;
+                // Quota: account = caller (enforced == owner). 507 over limit.
+                if !Self::try_debit(tx, &hex::encode(&caller), new_manifest.ciphertext_size as i64)?
+                {
+                    return Ok(IndexNodeResponse::err("507 insufficient storage"));
+                }
 
                 // Decrement refs of the overwritten manifest (INSERT OR REPLACE
-                // drops the old row), so re-puts don't leak refcounts.
+                // drops the old row), so re-puts don't leak refcounts. Also
+                // release its quota — a re-put re-bills at the new size.
                 if let Some(existing) = tx
                     .query_row(
                         "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
@@ -195,10 +268,10 @@ impl StateMachineInner {
                     .optional()
                     .map_err(to_io_err)?
                 {
-                    for s in crate::client::manifest::deserialize_manifest(&existing)
-                        .map_err(to_io_err)?
-                        .shards
-                    {
+                    let old = crate::client::manifest::deserialize_manifest(&existing)
+                        .map_err(to_io_err)?;
+                    Self::release(tx, &hex::encode(&caller), old.ciphertext_size as i64)?;
+                    for s in &old.shards {
                         tx.execute(
                             "UPDATE shard_refs SET refs = refs - 1 WHERE blob_hash=?1 AND refs > 0",
                             params![s.blob_hash.to_vec()],
@@ -207,10 +280,7 @@ impl StateMachineInner {
                     }
                 }
                 // Increment refs of the new manifest's shards.
-                for s in crate::client::manifest::deserialize_manifest(&manifest_bytes)
-                    .map_err(to_io_err)?
-                    .shards
-                {
+                for s in &new_manifest.shards {
                     tx.execute(
                         "INSERT INTO shard_refs (blob_hash, refs) VALUES (?1, 1)
                 ON CONFLICT(blob_hash) DO UPDATE SET refs = refs + 1",
@@ -283,7 +353,7 @@ impl StateMachineInner {
                 if Self::bucket_owner(tx, &bucket)?.as_deref() != Some(caller.as_slice()) {
                     return Ok(IndexNodeResponse::err("forbidden"));
                 }
-                if let Some(mb) = tx
+                let old_manifest: Option<crate::client::manifest::Manifest> = tx
                     .query_row(
                         "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
                         params![bucket, key],
@@ -291,11 +361,13 @@ impl StateMachineInner {
                     )
                     .optional()
                     .map_err(to_io_err)?
-                {
-                    for s in crate::client::manifest::deserialize_manifest(&mb)
-                        .map_err(to_io_err)?
-                        .shards
-                    {
+                    .map(|mb| crate::client::manifest::deserialize_manifest(&mb))
+                    .transpose()
+                    .map_err(to_io_err)?;
+                // Release quota for the object's stored bytes (account = caller).
+                if let Some(ref m) = old_manifest {
+                    Self::release(tx, &hex::encode(&caller), m.ciphertext_size as i64)?;
+                    for s in &m.shards {
                         tx.execute(
                             "UPDATE shard_refs SET refs = refs - 1 WHERE blob_hash=?1 AND refs > 0",
                             params![s.blob_hash.to_vec()],
@@ -378,20 +450,33 @@ impl StateMachineInner {
                         |r| r.get::<_, Vec<u8>>(0),
                     )
                     .map_err(to_io_err)?;
-                for s in crate::client::manifest::deserialize_manifest(&old)
-                    .map_err(to_io_err)?
-                    .shards
-                {
+                let old_manifest =
+                    crate::client::manifest::deserialize_manifest(&old).map_err(to_io_err)?;
+                let new_manifest =
+                    crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                        .map_err(to_io_err)?;
+                // Quota: account = the bucket OWNER (caller is the repair operator).
+                // Adjust usage by the ciphertext-size delta.
+                if let Some(o) = Self::bucket_owner(tx, &bucket)? {
+                    let account = hex::encode(&o);
+                    let delta =
+                        new_manifest.ciphertext_size as i64 - old_manifest.ciphertext_size as i64;
+                    if delta > 0 {
+                        if !Self::try_debit(tx, &account, delta)? {
+                            return Ok(IndexNodeResponse::err("507 insufficient storage"));
+                        }
+                    } else if delta < 0 {
+                        Self::release(tx, &account, -delta)?;
+                    }
+                }
+                for s in &old_manifest.shards {
                     tx.execute(
                         "UPDATE shard_refs SET refs = refs - 1 WHERE blob_hash=?1 AND refs > 0",
                         params![s.blob_hash.to_vec()],
                     )
                     .map_err(to_io_err)?;
                 }
-                for s in crate::client::manifest::deserialize_manifest(&manifest_bytes)
-                    .map_err(to_io_err)?
-                    .shards
-                {
+                for s in &new_manifest.shards {
                     tx.execute(
                         "INSERT INTO shard_refs (blob_hash, refs) VALUES (?1, 1)
                 ON CONFLICT(blob_hash) DO UPDATE SET refs = refs + 1",
@@ -408,6 +493,68 @@ impl StateMachineInner {
                     rusqlite::params![object_hash, bucket, key, manifest_bytes, Vec::<u8>::new(), now],
                 )
                 .map_err(to_io_err)?;
+                IndexNodeResponse::ok()
+            }
+
+            IndexNodeRequest::SetPaymentOperator { caller } => {
+                let existing: Option<Vec<u8>> = tx
+                    .query_row(
+                        "SELECT v FROM sm_meta WHERE k = 'payment_operator'",
+                        [],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?;
+                match existing {
+                    Some(_) => IndexNodeResponse::err("payment operator already set"),
+                    None => {
+                        tx.execute(
+                            "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('payment_operator', ?1)",
+                            params![caller],
+                        )
+                        .map_err(to_io_err)?;
+                        IndexNodeResponse::ok()
+                    }
+                }
+            }
+
+            IndexNodeRequest::AllocateQuota {
+                account_id,
+                bytes,
+                source,
+                ref_id,
+                caller,
+            } => {
+                // 1. Only the registered payment operator may credit quota.
+                let operator: Option<Vec<u8>> = tx
+                    .query_row(
+                        "SELECT v FROM sm_meta WHERE k = 'payment_operator'",
+                        [],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?;
+                if operator.as_deref() != Some(caller.as_slice()) {
+                    return Ok(IndexNodeResponse::err("not payment operator"));
+                }
+                // 2. Idempotent: (source, ref_id) seen before is a no-op.
+                let applied = tx
+                    .execute(
+                        "INSERT INTO quota_events (source, ref_id, account_id, bytes, applied_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)
+                         ON CONFLICT(source, ref_id) DO NOTHING",
+                        params![source, ref_id, account_id, bytes as i64, log_index as i64],
+                    )
+                    .map_err(to_io_err)?;
+                if applied > 0 {
+                    tx.execute(
+                        "INSERT INTO quota (account_id, total_bytes, used_bytes, created_at)
+                         VALUES (?1, ?2, 0, ?3)
+                         ON CONFLICT(account_id) DO UPDATE SET total_bytes = total_bytes + ?2",
+                        params![account_id, bytes as i64, log_index as i64],
+                    )
+                    .map_err(to_io_err)?;
+                }
                 IndexNodeResponse::ok()
             }
 
@@ -455,6 +602,9 @@ pub struct ArkelStateMachineSnapshot {
     repair_operator: Option<Vec<u8>>,
     last_applied_log: Option<LogIdOf<ArkelRaftConfig>>,
     last_membership: StoredMembershipOf<ArkelRaftConfig>,
+    payment_operator: Option<Vec<u8>>,
+    quota: Vec<(String, i64, i64)>,
+    quota_events: Vec<(String, String, String, i64, i64)>,
     snapshot_index: u64,
 }
 
@@ -537,6 +687,48 @@ impl ArkelStateMachine {
                 )
                 .optional()
                 .map_err(to_io_err)?,
+            payment_operator: sm
+                .conn
+                .query_row(
+                    "SELECT v FROM sm_meta WHERE k = 'payment_operator'",
+                    [],
+                    |r| r.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .map_err(to_io_err)?,
+            quota: sm
+                .conn
+                .prepare_cached("SELECT account_id, total_bytes, used_bytes FROM quota")
+                .map_err(to_io_err)?
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(to_io_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(to_io_err)?,
+            quota_events: sm
+                .conn
+                .prepare_cached(
+                    "SELECT source, ref_id, account_id, bytes, applied_at FROM quota_events",
+                )
+                .map_err(to_io_err)?
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                })
+                .map_err(to_io_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(to_io_err)?,
+
             last_applied_log: sm.last_applied_log.clone(),
             last_membership: sm.last_membership.clone(),
             snapshot_index: sm.snapshot_index,
@@ -680,6 +872,18 @@ impl ArkelStateMachine {
             .iter()
             .map(|(id, ns)| (id.clone(), ns.last_seen))
             .collect())
+    }
+
+    pub async fn account_quota(&self, account: &str) -> Result<Option<(i64, i64)>, io::Error> {
+        let sm = self.inner.lock().await;
+        sm.conn
+            .query_row(
+                "SELECT total_bytes, used_bytes FROM quota WHERE account_id=?1",
+                params![account],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(to_io_err)
     }
 }
 
@@ -825,6 +1029,9 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
         tx.execute("DELETE FROM manifests", []).map_err(to_io_err)?;
         tx.execute("DELETE FROM shard_refs", [])
             .map_err(to_io_err)?;
+        tx.execute("DELETE FROM quota", []).map_err(to_io_err)?;
+        tx.execute("DELETE FROM quota_events", [])
+            .map_err(to_io_err)?;
 
         {
             let mut bucket_stmt = tx
@@ -866,6 +1073,31 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
                 params![op],
             )
             .map_err(to_io_err)?;
+        }
+        if let Some(ref op) = snap_data.payment_operator {
+            tx.execute(
+                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('payment_operator', ?1)",
+                params![op],
+            )
+            .map_err(to_io_err)?;
+        }
+        {
+            let mut stmt = tx
+                .prepare_cached("INSERT INTO quota (account_id, total_bytes, used_bytes, created_at) VALUES (?1, ?2, ?3, ?4)")
+                .map_err(to_io_err)?;
+            for (account_id, total, used) in &snap_data.quota {
+                stmt.execute(params![account_id, total, used, 0i64])
+                    .map_err(to_io_err)?;
+            }
+        }
+        {
+            let mut stmt = tx
+                .prepare_cached("INSERT INTO quota_events (source, ref_id, account_id, bytes, applied_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+                .map_err(to_io_err)?;
+            for (source, ref_id, account_id, bytes, applied_at) in &snap_data.quota_events {
+                stmt.execute(params![source, ref_id, account_id, bytes, applied_at])
+                    .map_err(to_io_err)?;
+            }
         }
 
         let log_bytes = meta.last_log_id.as_ref().map(cbor_to_io).transpose()?;
@@ -916,6 +1148,9 @@ impl RaftSnapshotBuilder<ArkelRaftConfig> for ArkelStateMachine {
             manifests: snapshot.manifests,
             shard_refs: snapshot.shard_refs,
             repair_operator: snapshot.repair_operator,
+            payment_operator: snapshot.payment_operator,
+            quota: snapshot.quota,
+            quota_events: snapshot.quota_events,
         };
         let data = cbor_to_io(&snap_data)?;
 

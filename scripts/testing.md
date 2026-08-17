@@ -42,9 +42,10 @@ Network emulation (tc-netem on loopback, requires sudo):
     quorum   kill an index node, Raft 2/3
     relay    NAT'd node's shards pulled via relay
     repair   kill a node → repair re-encodes/redistributes
+    account  quota credit/debit, 507 over limit, release, idempotency
     perf     throughput benchmark
 
 Run all:
 
-    for s in basic delete access parity quorum relay repair; do \
+    for s in basic delete access parity quorum relay repair account; do \
       python scripts/run_nodes.py smoke $s; done

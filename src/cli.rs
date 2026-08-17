@@ -66,6 +66,16 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: ClientCmd,
     },
+    /// Account & quota tools
+    Account {
+        #[command(subcommand)]
+        cmd: AccountCmd,
+    },
+    /// Payment-operator tooling (register the quota credit key; first-wins)
+    Payment {
+        #[command(subcommand)]
+        cmd: PaymentCmd,
+    },
     /// Heal objects below target k/m (standalone, idempotent; run by cron)
     Repair {
         /// Index node HTTP URLs (comma-separated)
@@ -121,6 +131,47 @@ pub enum ClientCmd {
     Rm {
         bucket: String,
         key: String,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AccountCmd {
+    /// Show quota and usage for an account (default: this identity)
+    Quota {
+        /// Account (hex iroh pubkey); defaults to this node's identity
+        #[arg(long)]
+        account: Option<String>,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PaymentCmd {
+    /// Register this identity as the payment operator (one-time, first-wins)
+    Register {
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+    },
+    /// Credit quota to an account (idempotent on --ref-id)
+    Credit {
+        /// Account (hex iroh pubkey) to credit
+        #[arg(long)]
+        account: String,
+        /// Bytes of quota to add
+        #[arg(long)]
+        bytes: u64,
+        /// Credit source label (e.g. 'payment')
+        #[arg(long, default_value = "payment")]
+        source: String,
+        /// Idempotency reference (e.g. Stripe checkout id); replay is a no-op
+        #[arg(long)]
+        ref_id: String,
         /// Index node HTTP URLs (comma-separated)
         #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
         index_addrs: Vec<String>,

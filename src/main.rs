@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use arkel::{
     Arkel, BootstrapConfig, NodeMode,
     client::{Client as ArkelClient, ClientConfig},
-    cli::{Cli, ClientCmd, Commands, erasure_config, parse_targets},
+    cli::{AccountCmd, Cli, ClientCmd, Commands, PaymentCmd, erasure_config, parse_targets},
     dataplane::ErasureConfig,
     identity::NodeIdentity,
 };
@@ -10,6 +10,56 @@ use clap::Parser;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+async fn run_account(identity: &NodeIdentity, cmd: AccountCmd) -> Result<()> {
+    match cmd {
+        AccountCmd::Quota { account, index_addrs } => {
+            let account = account.unwrap_or_else(|| hex::encode(identity.node_id().as_bytes()));
+            let http = reqwest::Client::new();
+            let (total, used) =
+                arkel::index::client::account_quota(&http, &index_addrs, &account).await?;
+            println!("{account}: {used} / {total} bytes used");
+            Ok(())
+        }
+    }
+}
+
+/// Payment-operator tooling: register this identity as the payment operator,
+/// or credit quota to an account (the payment service in CLI form).
+async fn run_payment(identity: &NodeIdentity, cmd: PaymentCmd) -> Result<()> {
+    let http = reqwest::Client::new();
+    match cmd {
+        PaymentCmd::Register { index_addrs } => {
+            arkel::index::client::set_payment_operator(
+                &http,
+                &index_addrs,
+                identity.secret_key(),
+            )
+            .await?;
+            println!("registered payment operator: {}", identity.node_id());
+        }
+        PaymentCmd::Credit {
+            account,
+            bytes,
+            source,
+            ref_id,
+            index_addrs,
+        } => {
+            arkel::index::client::credit_quota(
+                &http,
+                &index_addrs,
+                &account,
+                bytes,
+                &source,
+                &ref_id,
+                identity.secret_key(),
+            )
+            .await?;
+            println!("credited {bytes} bytes to {account} (ref {ref_id})");
+        }
+    }
+    Ok(())
+}
 
 async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) -> Result<()> {
     let store_dir = base_dir.join("blobs");
@@ -130,6 +180,8 @@ async fn main() -> Result<()> {
             Commands::Index { http_addr, .. } => format!("index_{}", http_addr.port()),
             Commands::Storage { .. } => "storage".to_string(),
             Commands::Client { .. } => "client".to_string(),
+            Commands::Account { .. } => "account".to_string(),
+            Commands::Payment { .. } => "payment".to_string(),
             Commands::Repair { .. } => "repair".to_string(),
         };
         PathBuf::from(format!("./.arkel_{suffix}_data"))
@@ -140,6 +192,10 @@ async fn main() -> Result<()> {
 
     let mode = match cli.command {
         Commands::Client { cmd } => return run_client(base_dir, &arkel.identity, cmd).await,
+        Commands::Account { cmd } => return run_account(&arkel.identity, cmd).await,
+        Commands::Payment { cmd } => {
+            return run_payment(&arkel.identity, cmd).await;
+        }
         Commands::Repair {
             index_addrs,
             register,

@@ -38,6 +38,16 @@ pub enum IndexNodeRequest {
         manifest_bytes: Vec<u8>,
         caller: Vec<u8>,
     },
+    SetPaymentOperator {
+        caller: Vec<u8>,
+    },
+    AllocateQuota {
+        account_id: String,
+        bytes: u64,
+        source: String,
+        ref_id: String,
+        caller: Vec<u8>,
+    },
     Batch(Vec<IndexNodeRequest>),
     RegisterNode {
         node_id: Vec<u8>,
@@ -81,6 +91,17 @@ impl fmt::Display for IndexNodeRequest {
                     .map(|id| hex::encode(id).chars().take(16).collect())
                     .collect();
                 write!(f, "MarkNodesOffline({})", ids.join(", "))
+            }
+            IndexNodeRequest::SetPaymentOperator { .. } => {
+                write!(f, "SetPaymentOperator")
+            }
+            IndexNodeRequest::AllocateQuota {
+                account_id,
+                bytes,
+                ref_id,
+                ..
+            } => {
+                write!(f, "AllocateQuota({}, +{}, {})", account_id, bytes, ref_id)
             }
         }
     }

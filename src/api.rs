@@ -144,6 +144,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/register", post(register_node))
         .route("/nodes", get(list_nodes))
         .route("/nodes/all", get(list_all_nodes))
+        .route("/account/quota", get(account_quota).post(credit_quota))
+        .route("/payment-operator", post(set_payment_operator))
         .route("/manifests", get(list_manifests))
         .route("/repair-operator", post(set_repair_operator))
         .route("/manifest/:bucket/:key/repair", post(repair_manifest))
@@ -432,6 +434,53 @@ async fn list_objects(
     }
 }
 
+async fn account_quota(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let account = params.get("account").cloned().unwrap_or_default();
+    match state.state_machine.account_quota(&account).await {
+        Ok(Some((total, used))) => Json(serde_json::json!({
+            "account": account,
+            "total_bytes": total,
+            "used_bytes": used,
+        }))
+        .into_response(),
+        Ok(None) => Json(serde_json::json!({
+            "account": account,
+            "total_bytes": 0,
+            "used_bytes": 0,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn set_payment_operator(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller =
+        match crate::index::auth::verify_request("POST", "payment-operator", &body, &headers) {
+            Ok(pk) => pk,
+            Err(e) => {
+                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
+                    .into_response();
+            }
+        };
+    let cmd = IndexNodeRequest::SetPaymentOperator {
+        caller: caller.as_bytes().to_vec(),
+    };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct RegisterNode {
     pub node_id: String,
@@ -528,5 +577,51 @@ async fn gc_candidates(
             Json(candidates.iter().map(hex::encode).collect::<Vec<String>>()).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreditQuotaPayload {
+    pub account_id: String,
+    pub bytes: u64,
+    pub source: String,
+    pub ref_id: String,
+}
+
+async fn credit_quota(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request("POST", "account/quota", &body, &headers)
+    {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    let payload: CreditQuotaPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(IndexNodeResponse::err(&e.to_string())),
+            )
+                .into_response();
+        }
+    };
+    let cmd = IndexNodeRequest::AllocateQuota {
+        account_id: payload.account_id,
+        bytes: payload.bytes,
+        source: payload.source,
+        ref_id: payload.ref_id,
+        caller: caller.as_bytes().to_vec(),
+    };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
     }
 }

@@ -305,3 +305,62 @@ pub async fn list_all_nodes(
         })
         .collect()
 }
+
+pub async fn account_quota(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    account: &str,
+) -> Result<(u64, u64)> {
+    let body = index_read(
+        http,
+        index_addrs,
+        &format!("account/quota?account={account}"),
+    )
+    .await?;
+    Ok((
+        body["total_bytes"].as_u64().unwrap_or(0),
+        body["used_bytes"].as_u64().unwrap_or(0),
+    ))
+}
+
+/// One-time registration of this identity as the payment operator
+pub async fn set_payment_operator(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    index_write(
+        http,
+        index_addrs,
+        "payment-operator",
+        &serde_json::json!({}),
+        secret_key,
+    )
+    .await
+}
+
+/// Signed credit of `bytes` quota to an account (idempotent on `ref_id`).
+pub async fn credit_quota(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    account_id: &str,
+    bytes: u64,
+    source: &str,
+    ref_id: &str,
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    index_send(
+        http,
+        index_addrs,
+        reqwest::Method::POST,
+        "account/quota",
+        &serde_json::json!({
+            "account_id": account_id,
+            "bytes": bytes,
+            "source": source,
+            "ref_id": ref_id,
+        }),
+        secret_key,
+    )
+    .await
+}
