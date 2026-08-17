@@ -36,6 +36,11 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-client-put"><code>arkel client put</code>↴</a></li>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-client-get"><code>arkel client get</code>↴</a></li>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-client-rm"><code>arkel client rm</code>↴</a></li>
+<li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-account"><code>arkel account</code>↴</a></li>
+<li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-account-quota"><code>arkel account quota</code>↴</a></li>
+<li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment"><code>arkel payment</code>↴</a></li>
+<li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment-register"><code>arkel payment register</code>↴</a></li>
+<li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment-credit"><code>arkel payment credit</code>↴</a></li>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-repair"><code>arkel repair</code>↴</a></li>
 </ul>
 <h2 id="arkel"><code>arkel</code></h2>
@@ -45,6 +50,8 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <ul>
 <li><code>storage</code> — Boot up as a high-throughput raw block storage endpoint</li>
 <li><code>client</code> — Upload/download objects as an iroh-native client</li>
+<li><code>account</code> — Account &amp; quota tools</li>
+<li><code>payment</code> — Payment-operator tooling (register the quota credit key; first-wins)</li>
 <li><code>repair</code> — Heal objects below target k/m (standalone, idempotent; run by cron)</li>
 </ul>
 <h6 id="options"><strong>Options:</strong></h6>
@@ -144,10 +151,71 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
 </li>
 </ul>
+<h2 id="arkel-account"><code>arkel account</code></h2>
+<p>Account &amp; quota tools</p>
+<p><strong>Usage:</strong> <code>arkel account &lt;COMMAND&gt;</code></p>
+<h6 id="subcommands-2"><strong>Subcommands:</strong></h6>
+<ul>
+<li><code>quota</code> — Show quota and usage for an account (default: this identity)</li>
+</ul>
+<h2 id="arkel-account-quota"><code>arkel account quota</code></h2>
+<p>Show quota and usage for an account (default: this identity)</p>
+<p><strong>Usage:</strong> <code>arkel account quota [OPTIONS]</code></p>
+<h6 id="options-5"><strong>Options:</strong></h6>
+<ul>
+<li>
+<p><code>--account &lt;ACCOUNT&gt;</code> — Account (hex iroh pubkey); defaults to this node's identity</p>
+</li>
+<li>
+<p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs (comma-separated)</p>
+<p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
+</li>
+</ul>
+<h2 id="arkel-payment"><code>arkel payment</code></h2>
+<p>Payment-operator tooling (register the quota credit key; first-wins)</p>
+<p><strong>Usage:</strong> <code>arkel payment &lt;COMMAND&gt;</code></p>
+<h6 id="subcommands-3"><strong>Subcommands:</strong></h6>
+<ul>
+<li><code>register</code> — Register this identity as the payment operator (one-time, first-wins)</li>
+<li><code>credit</code> — Credit quota to an account (idempotent on --ref-id)</li>
+</ul>
+<h2 id="arkel-payment-register"><code>arkel payment register</code></h2>
+<p>Register this identity as the payment operator (one-time, first-wins)</p>
+<p><strong>Usage:</strong> <code>arkel payment register [OPTIONS]</code></p>
+<h6 id="options-6"><strong>Options:</strong></h6>
+<ul>
+<li>
+<p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs (comma-separated)</p>
+<p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
+</li>
+</ul>
+<h2 id="arkel-payment-credit"><code>arkel payment credit</code></h2>
+<p>Credit quota to an account (idempotent on --ref-id)</p>
+<p><strong>Usage:</strong> <code>arkel payment credit [OPTIONS] --account &lt;ACCOUNT&gt; --bytes &lt;BYTES&gt; --ref-id &lt;REF_ID&gt;</code></p>
+<h6 id="options-7"><strong>Options:</strong></h6>
+<ul>
+<li>
+<p><code>--account &lt;ACCOUNT&gt;</code> — Account (hex iroh pubkey) to credit</p>
+</li>
+<li>
+<p><code>--bytes &lt;BYTES&gt;</code> — Bytes of quota to add</p>
+</li>
+<li>
+<p><code>--source &lt;SOURCE&gt;</code> — Credit source label (e.g. 'payment')</p>
+<p>Default value: <code>payment</code></p>
+</li>
+<li>
+<p><code>--ref-id &lt;REF_ID&gt;</code> — Idempotency reference (e.g. Stripe checkout id); replay is a no-op</p>
+</li>
+<li>
+<p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs (comma-separated)</p>
+<p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
+</li>
+</ul>
 <h2 id="arkel-repair"><code>arkel repair</code></h2>
 <p>Heal objects below target k/m (standalone, idempotent; run by cron)</p>
 <p><strong>Usage:</strong> <code>arkel repair [OPTIONS]</code></p>
-<h6 id="options-5"><strong>Options:</strong></h6>
+<h6 id="options-8"><strong>Options:</strong></h6>
 <ul>
 <li>
 <p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs (comma-separated)</p>
