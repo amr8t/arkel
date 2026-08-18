@@ -11,6 +11,7 @@ use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 pub mod api;
 pub mod cli;
 pub mod client;
+pub mod config;
 pub mod dataplane;
 pub mod identity;
 pub mod index;

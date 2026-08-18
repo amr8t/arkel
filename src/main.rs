@@ -8,6 +8,7 @@ use arkel::{
 };
 use clap::Parser;
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -174,26 +175,34 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
+    let node_cfg = match &cli.config {
+        Some(p) => arkel::config::NodeConfig::load(p)?,
+        None => Default::default(),
+    };
+    let cfg_index = node_cfg.index_nodes.clone().unwrap_or_default();
+    let cfg_storage = node_cfg.storage.clone().unwrap_or_default();
+    let cli_data_dir = cli.data_dir.clone();
 
-    let base_dir = cli.data_dir.unwrap_or_else(|| {
-        let suffix = match &cli.command {
-            Commands::Index { http_addr, .. } => format!("index_{}", http_addr.port()),
-            Commands::Storage { .. } => "storage".to_string(),
-            Commands::Client { .. } => "client".to_string(),
-            Commands::Account { .. } => "account".to_string(),
-            Commands::Payment { .. } => "payment".to_string(),
-            Commands::Repair { .. } => "repair".to_string(),
-        };
-        PathBuf::from(format!("./.arkel_{suffix}_data"))
-    });
-
-    let arkel = Arkel::init(base_dir.clone()).await?;
-    let node_id = arkel.identity.raft_node_id();
-
-    let mode = match cli.command {
-        Commands::Client { cmd } => return run_client(base_dir, &arkel.identity, cmd).await,
-        Commands::Account { cmd } => return run_account(&arkel.identity, cmd).await,
+    match cli.command {
+        Commands::Client { cmd } => {
+            let base = cli_data_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./.arkel_client_data"));
+            let arkel = Arkel::init(base).await?;
+            return run_client(arkel.data_dir.clone(), &arkel.identity, cmd).await;
+        }
+        Commands::Account { cmd } => {
+            let base = cli_data_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./.arkel_account_data"));
+            let arkel = Arkel::init(base).await?;
+            return run_account(&arkel.identity, cmd).await;
+        }
         Commands::Payment { cmd } => {
+            let base = cli_data_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./.arkel_payment_data"));
+            let arkel = Arkel::init(base).await?;
             return run_payment(&arkel.identity, cmd).await;
         }
         Commands::Repair {
@@ -203,8 +212,12 @@ async fn main() -> Result<()> {
             m,
             rate_limit,
         } => {
+            let base = cli_data_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./.arkel_repair_data"));
+            let arkel = Arkel::init(base.clone()).await?;
             return run_repair(
-                base_dir,
+                base,
                 &arkel.identity,
                 index_addrs,
                 register,
@@ -217,10 +230,22 @@ async fn main() -> Result<()> {
             http_addr,
             peer_addresses,
         } => {
+            let http_addr = arkel::config::resolve_addr(
+                http_addr,
+                cfg_index.http_addr,
+                "127.0.0.1:8001",
+            )?;
+            let peers = peer_addresses.or(cfg_index.peers).unwrap_or_default();
+            let base = cli_data_dir
+                .clone()
+                .or(cfg_index.data_dir.clone().map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from(format!("./.arkel_index_{}_data", http_addr.port())));
+            let arkel = Arkel::init(base).await?;
+            let node_id = arkel.identity.raft_node_id();
             let my_full_addr = arkel.identity.raft_full_addr(http_addr);
 
             // Filter peers to avoid self-referential network loops
-            let filtered_peers: Vec<String> = peer_addresses
+            let filtered_peers: Vec<String> = peers
                 .into_iter()
                 .filter(|addr| addr != &my_full_addr)
                 .collect();
@@ -234,12 +259,14 @@ async fn main() -> Result<()> {
             }
             tracing::info!("==================================================");
 
-            NodeMode::Index {
-                bootstrap: BootstrapConfig {
-                    peer_addresses: filtered_peers,
-                },
-                http_addr,
-            }
+            return arkel
+                .run(NodeMode::Index {
+                    bootstrap: BootstrapConfig {
+                        peer_addresses: filtered_peers,
+                    },
+                    http_addr,
+                })
+                .await;
         }
         Commands::Storage {
             private_relay_url,
@@ -248,7 +275,31 @@ async fn main() -> Result<()> {
             advertise_addr,
             gc_interval_secs,
         } => {
-            let blob_dir = base_dir.join("blobs");
+            let addr = arkel::config::resolve_addr(addr, cfg_storage.addr, "127.0.0.1:9001")?;
+            let advertise_addr = advertise_addr.or_else(|| {
+                cfg_storage
+                    .advertise_addr
+                    .as_deref()
+                    .and_then(|s| s.parse::<SocketAddr>().ok())
+            });
+            let index_addrs = index_addrs
+                .or(cfg_storage.index_addrs)
+                .unwrap_or_else(|| {
+                    arkel::cli::DEFAULT_INDEX_ADDRS
+                        .split(',')
+                        .map(String::from)
+                        .collect()
+                });
+            let gc_interval_secs = gc_interval_secs
+                .or(cfg_storage.gc_interval_secs)
+                .unwrap_or(3600);
+            let base = cli_data_dir
+                .clone()
+                .or(cfg_storage.data_dir.clone().map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("./.arkel_storage_data"));
+            let arkel = Arkel::init(base.clone()).await?;
+
+            let blob_dir = base.join("blobs");
             let store: iroh_blobs::api::Store = {
                 use iroh_blobs::store::{GcConfig, ProtectCb, ProtectOutcome};
                 use std::collections::HashSet;
@@ -346,22 +397,22 @@ async fn main() -> Result<()> {
             };
             let blobs = iroh_blobs::BlobsProtocol::new(&store, None);
 
-            let shard_dir = base_dir.join("shards");
+            let shard_dir = base.join("shards");
             tokio::fs::create_dir_all(&shard_dir)
                 .await
                 .context("Failed to create shard directory")?;
 
-            NodeMode::Storage {
-                base_dir,
-                blobs,
-                store,
-                private_relay_url,
-                index_addrs,
-                addr,
-                advertise_addr,
-            }
+            return arkel
+                .run(NodeMode::Storage {
+                    base_dir: base,
+                    blobs,
+                    store,
+                    private_relay_url,
+                    index_addrs,
+                    addr,
+                    advertise_addr,
+                })
+                .await;
         }
-    };
-
-    arkel.run(mode).await
+    }
 }

@@ -21,6 +21,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
+      - name: Checksum
+        run: |
+          cd target/release
+          sha256sum arkel > arkel.sha256
+          cat arkel.sha256
       - uses: softprops/action-gh-release@v2
         with:
-          files: target/release/arkel
+          files: |
+            target/release/arkel
+            target/release/arkel.sha256

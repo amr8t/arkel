@@ -49,6 +49,7 @@ Arkel Distributed Blob Index & Storage Node
 ###### **Options:**
 
 * `--data-dir <DATA_DIR>` — Dedicated data directory for this specific node's cryptographic identities and storage state
+* `--config <CONFIG>` — Node config file (arkel-node.toml); command-line flags override it
 
 
 
@@ -62,15 +63,9 @@ Boot up as a high-throughput raw block storage endpoint
 
 * `--private-relay-url <PRIVATE_RELAY_URL>` — Optional private Iroh relay architecture URL override
 * `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs to register against (comma-separated; the registrar discovers the current Raft leader among them)
-
-  Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`
 * `--addr <ADDR>` — Address the iroh QUIC endpoint binds to
-
-  Default value: `127.0.0.1:9001`
 * `--advertise-addr <ADVERTISE_ADDR>` — Address advertised for registration (defaults to --addr)
 * `--gc-interval-secs <GC_INTERVAL_SECS>` — How often to scan and delete unreferenced shards (seconds)
-
-  Default value: `3600`
 
 
 

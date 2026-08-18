@@ -24,6 +24,10 @@ pub struct Cli {
     /// Dedicated data directory for this specific node's cryptographic identities and storage state
     #[arg(long, global = true)]
     pub data_dir: Option<PathBuf>,
+
+    /// Node config file (arkel-node.toml); command-line flags override it
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -31,12 +35,12 @@ pub enum Commands {
     /// Boot up as a metadata consensus node managing the global catalog ring
     Index {
         /// The network socket address this node will bind its HTTP interface to
-        #[arg(long, default_value = "127.0.0.1:8001")]
-        http_addr: SocketAddr,
+        #[arg(long)]
+        http_addr: Option<SocketAddr>,
 
         /// Seed nodes to cluster with if initializing or expanding the topology
         #[arg(long, value_delimiter = ',')]
-        peer_addresses: Vec<String>,
+        peer_addresses: Option<Vec<String>>,
     },
     /// Boot up as a high-throughput raw block storage endpoint
     Storage {
@@ -46,20 +50,20 @@ pub enum Commands {
 
         /// Index node HTTP URLs to register against (comma-separated; the
         /// registrar discovers the current Raft leader among them)
-        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
-        index_addrs: Vec<String>,
+        #[arg(long, value_delimiter = ',')]
+        index_addrs: Option<Vec<String>>,
 
         /// Address the iroh QUIC endpoint binds to
-        #[arg(long, default_value = "127.0.0.1:9001")]
-        addr: SocketAddr,
+        #[arg(long)]
+        addr: Option<SocketAddr>,
 
         /// Address advertised for registration (defaults to --addr).
         #[arg(long)]
         advertise_addr: Option<SocketAddr>,
 
         /// How often to scan and delete unreferenced shards (seconds).
-        #[arg(long, default_value_t = 3600)]
-        gc_interval_secs: u64,
+        #[arg(long)]
+        gc_interval_secs: Option<u64>,
     },
     /// Upload/download objects as an iroh-native client
     Client {
