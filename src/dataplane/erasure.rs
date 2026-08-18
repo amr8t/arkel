@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use reed_solomon_erasure::galois_8::ReedSolomon;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ErasureConfig {
     pub k: usize, // number of data shards
     pub m: usize, // number of parity shards

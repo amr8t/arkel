@@ -1,5 +1,7 @@
 //! Standalone repair operator: scans the index for objects below target k/m
 //! and heals them (decode survivors -> re-encode -> redistribute -> re-commit).
+//! Also migrates healthy objects recorded at an older/lower scheme up to the
+//! effective target as the pool grows.
 //!
 //! Encryption-agnostic — works on ciphertext shards, no keys needed. Run
 //! hourly via cron; idempotent and rate-limited. Health-aware detection:
@@ -53,13 +55,17 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
         if fixed >= rate_limit {
             break;
         }
-        let m = crate::client::manifest::deserialize_manifest(&mb)?;
-        let total = m.k as usize + m.m as usize;
+        let manifest = crate::client::manifest::deserialize_manifest(&mb)?;
+        let total = manifest.k as usize + manifest.m as usize;
+        let from = ErasureConfig {
+            k: manifest.k as usize,
+            m: manifest.m as usize,
+        };
 
         // Health-aware availability: skip offline nodes, fetch the rest.
         let mut slots: Vec<Option<Vec<u8>>> = vec![None; total];
         let mut avail = 0usize;
-        for placement in &m.shards {
+        for placement in &manifest.shards {
             if offline.contains(&placement.node_id) {
                 continue;
             }
@@ -78,28 +84,32 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
             }
         }
 
-        if avail >= total || avail < m.k as usize {
-            continue; // healthy, or unrecoverable until a node returns
+        // Effective target: assign_shards' degraded config, so the manifest k/m
+        // always matches the actual shard count.
+        let (effective, _) = crate::dataplane::assign_shards(cfg).await?;
+
+        if avail < manifest.k as usize {
+            tracing::warn!(
+                "skip {bucket}/{key}: only {avail} of {total} shards available (need {})",
+                manifest.k
+            );
+            continue; // unrecoverable until a node returns
+        }
+        if avail >= total && from == effective {
+            continue; // healthy and already at the effective target scheme
         }
 
         // Re-encode survivors to the effective target scheme and redistribute.
-        // Use assign_shards' effective config so the manifest k/m matches the
-        // actual shard count (same discipline as put()).
-        let (effective, _) = crate::dataplane::assign_shards(cfg).await?;
         let refs: Vec<Option<&[u8]>> = slots.iter().map(|o| o.as_deref()).collect();
-        let from = ErasureConfig {
-            k: m.k as usize,
-            m: m.m as usize,
-        };
-        let new_shards = reencode(&refs, from, m.ciphertext_size as usize, effective)
+        let new_shards = reencode(&refs, from, manifest.ciphertext_size as usize, effective)
             .context("re-encode failed")?;
         client
             .repair_object(
                 &bucket,
                 &key,
-                m.object_hash,
-                m.ciphertext_size,
-                m.original_size,
+                manifest.object_hash,
+                manifest.ciphertext_size,
+                manifest.original_size,
                 new_shards,
                 effective,
             )

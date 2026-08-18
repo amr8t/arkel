@@ -82,7 +82,7 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
             let cfg = ClientConfig {
                 index_addrs,
                 secret_key: identity.secret_key().clone(),
-                ec_config: ErasureConfig { k: 4, m: 2 },
+                ec_config: ErasureConfig { k: 8, m: 6 },
                 http: reqwest::Client::new(),
             };
             client = ArkelClient::new(cfg, store_dir).await?;
@@ -106,7 +106,7 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
             let cfg = ClientConfig {
                 index_addrs,
                 secret_key: identity.secret_key().clone(),
-                ec_config: ErasureConfig { k: 4, m: 2 },
+                ec_config: ErasureConfig { k: 8, m: 6 },
                 http: reqwest::Client::new(),
             };
             client = ArkelClient::new(cfg, store_dir).await?;
@@ -130,7 +130,7 @@ async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) 
             let cfg = ClientConfig {
                 index_addrs,
                 secret_key: identity.secret_key().clone(),
-                ec_config: ErasureConfig { k: 4, m: 2 },
+                ec_config: ErasureConfig { k: 8, m: 6 },
                 http: reqwest::Client::new(),
             };
             client = ArkelClient::new(cfg, store_dir).await?;

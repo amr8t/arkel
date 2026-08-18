@@ -232,12 +232,12 @@ Heal objects below target k/m (standalone, idempotent; run by cron)
 
   Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`
 * `--register` — Register this identity as the repair operator (one-time), then exit
-* `--k <K>` — Re-encode target data shards (default 4)
+* `--k <K>` — Re-encode target data shards (default 8)
 
-  Default value: `4`
-* `--m <M>` — Re-encode target parity shards (default 2)
+  Default value: `8`
+* `--m <M>` — Re-encode target parity shards (default 6)
 
-  Default value: `2`
+  Default value: `6`
 * `--rate-limit <RATE_LIMIT>` — Max objects fixed per run (rate limit)
 
   Default value: `600`

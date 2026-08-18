@@ -88,11 +88,11 @@ pub enum Commands {
         /// Register this identity as the repair operator (one-time), then exit
         #[arg(long)]
         register: bool,
-        /// Re-encode target data shards (default 4)
-        #[arg(long, default_value_t = 4)]
+        /// Re-encode target data shards (default 8)
+        #[arg(long, default_value_t = 8)]
         k: u8,
-        /// Re-encode target parity shards (default 2)
-        #[arg(long, default_value_t = 2)]
+        /// Re-encode target parity shards (default 6)
+        #[arg(long, default_value_t = 6)]
         m: u8,
         /// Max objects fixed per run (rate limit)
         #[arg(long, default_value_t = 600)]
