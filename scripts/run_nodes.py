@@ -36,10 +36,11 @@ NODE_ADDRS = [
 ]
 
 STORAGE_ADDRS = [
-    "127.0.0.1:9001",
-    "127.0.0.1:9002",
-    "127.0.0.1:9003",
+    f"127.0.0.1:{port}" for port in range(9001, 9015)
 ]
+
+# Storage ports that actually map into STORAGE_ADDRS (9001-9014).
+STORAGE_PORTS = {int(a.rsplit(":", 1)[-1]) for a in STORAGE_ADDRS}
 
 # Index node URLs storage nodes register against (the registrar discovers the
 # current Raft leader among these).
@@ -828,7 +829,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
         node = next((n for n in nodes if n.port == args.port), None)
         if node is None:
             # Storage node port?
-            if args.port in (9001, 9002, 9003):
+            if args.port in STORAGE_PORTS:
                 addr = STORAGE_ADDRS[args.port - 9001]
                 kill_arkel_storage_by_addr([addr])
                 time.sleep(0.5)
@@ -900,7 +901,8 @@ def cmd_clean(args: argparse.Namespace) -> int:
         if node.data_dir.exists():
             shutil.rmtree(node.data_dir, ignore_errors=True)
             print(f"[clean] Removed {node.data_dir}")
-    for port, addr in zip((9001, 9002, 9003), STORAGE_ADDRS):
+    for addr in STORAGE_ADDRS:
+        port = int(addr.rsplit(":", 1)[-1])
         data_dir = DATA_DIR / f".arkel_storage_{port}_data"
         if data_dir.exists():
             shutil.rmtree(data_dir, ignore_errors=True)
@@ -915,7 +917,10 @@ def cmd_start_storage(args: argparse.Namespace) -> int:
     print("== Arkel Storage Node Manager: start-storage ==")
     binary = build_binary()
     index_addrs = ",".join(args.index_addrs) if args.index_addrs else ",".join(INDEX_ADDRS)
-    storage_nodes = [StorageNode(port, addr) for port, addr in zip((9001, 9002, 9003), STORAGE_ADDRS)]
+    storage_nodes = [
+        StorageNode(int(addr.rsplit(":", 1)[-1]), addr)
+        for addr in STORAGE_ADDRS[: args.count]
+    ]
 
     kill_arkel_storage_by_addr(n.addr for n in storage_nodes)
     time.sleep(0.5)
@@ -943,8 +948,9 @@ def cmd_start_storage(args: argparse.Namespace) -> int:
             )
         time.sleep(0.3)
 
-    print(f"[start-storage] Storage nodes running in background (registering with {index_addrs}).")
-    print(f"               Logs: {LOG_DIR}/storage{{1,2,3}}.log")
+    print(f"[start-storage] {len(storage_nodes)} storage node(s) running in background "
+          f"(registering with {index_addrs}).")
+    print(f"               Logs: {LOG_DIR}/storage{{1..{args.count}}}.log")
     return 0
 
 
@@ -1063,7 +1069,13 @@ def main(argv: list[str] | None = None) -> int:
     # start-storage
     storage_parser = subparsers.add_parser(
         "start-storage",
-        help="Start 3 storage nodes in the background",
+        help="Start storage nodes in the background",
+    )
+    storage_parser.add_argument(
+        "--count",
+        type=int,
+        default=3,
+        help="Number of storage nodes to start (default: 3, max: 14)",
     )
     storage_parser.add_argument(
         "--index-addrs",
@@ -1100,6 +1112,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=5,
         help="Iterations for the perf scenario (default: 5)",
+    )
+    smoke_parser.add_argument(
+        "--nodes",
+        type=int,
+        default=14,
+        help="Storage node count for count-parameterized scenarios (default: 14)",
     )
 
     args = parser.parse_args([command, *rest] if command else rest)

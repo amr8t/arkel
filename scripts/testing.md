@@ -2,9 +2,14 @@
 
 ## Cluster lifecycle (`scripts/run_nodes.py`)
 
-Start a fresh cluster (3 index nodes 8001-8003 + 3 storage nodes 9001-9003):
+Start a fresh cluster (3 index nodes 8001-8003 + storage nodes 9001-9014):
 
     python scripts/run_nodes.py start --fresh
+
+Start `N` storage nodes (default 3, max 14 — the max supports a full (8,6)
+erasure placement of 14 shards):
+
+    python scripts/run_nodes.py start-storage --count 14
 
 Per-node index lifecycle (state is wiped but preserve the identity):
 
@@ -42,6 +47,8 @@ Network emulation (tc-netem on loopback, requires sudo):
     quorum   kill an index node, Raft 2/3
     relay    NAT'd node's shards pulled via relay
     repair   kill a node → repair re-encodes/redistributes
+    full_ec  full (8,6) over 14 nodes; survive losing all 6 parity nodes + repair
+    concentration  explicit 3-node put (14 shards crammed) → repair spreads to all 14
     account  quota credit/debit, 507 over limit, release, idempotency
     perf     throughput benchmark
 
@@ -49,3 +56,8 @@ Run all:
 
     for s in basic delete access parity quorum relay repair account; do \
       python scripts/run_nodes.py smoke $s; done
+
+Count-parameterized scenarios take `--nodes` (default 3); `full_ec` defaults
+to 14:
+
+    python scripts/run_nodes.py smoke full_ec

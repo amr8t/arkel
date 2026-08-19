@@ -16,7 +16,7 @@ SCRIPTS = REPO_ROOT / "scripts"
 BINARY = REPO_ROOT / "target" / "debug" / "arkel"
 CLIENT_DATA = REPO_ROOT / ".arkel_client_data"
 INDEX_FLAG = ",".join(f"http://127.0.0.1:{p}" for p in (8001, 8002, 8003))
-STORAGE_PORTS = (9001, 9002, 9003)
+STORAGE_PORTS = tuple(range(9001, 9015))
 STORAGE_DATA_DIRS = [
     REPO_ROOT / f".arkel_storage_{port}_data" for port in STORAGE_PORTS
 ]
@@ -26,7 +26,7 @@ def run_nodes(*cmd: str) -> None:
     subprocess.run([sys.executable, str(SCRIPTS / "run_nodes.py"), *cmd], check=True)
 
 
-def bring_up_network() -> str:
+def bring_up_network(count: int = 3) -> str:
     """Boot index + storage nodes, return the storage-addrs flag value.
 
     Self-cleans first: stale nodes from prior runs hold ports and write to
@@ -35,27 +35,29 @@ def bring_up_network() -> str:
     run_nodes("kill", "--all")
     time.sleep(1)
     run_nodes("start", "--fresh")
-    run_nodes("start-storage")
+    run_nodes("start-storage", "--count", str(count))
     time.sleep(3)
-    return storage_addrs()
+    return storage_addrs(count)
 
 
-def storage_addrs(timeout: float = 20.0) -> str:
-    """Poll the storage logs until all 3 endpointIds are present (startup latency)."""
+def storage_addrs(count: int = 3, timeout: float = 20.0) -> str:
+    """Poll the storage logs until `count` endpointIds are present (startup latency)."""
     deadline = time.monotonic() + timeout
     while True:
         parts: list[str] = []
         for i, port in enumerate(STORAGE_PORTS, start=1):
+            if len(parts) >= count:
+                break
             log = (REPO_ROOT / "logs" / f"storage{i}.log").read_text(errors="replace")
             for line in log.splitlines():
                 if "endpointId:" in line:
                     pubkey = line.split("endpointId:", 1)[1].split(".")[0].strip()
                     parts.append(f"{pubkey}@127.0.0.1:{port}")
                     break
-        if len(parts) == 3:
-            return ",".join(parts)
+        if len(parts) >= count:
+            return ",".join(parts[:count])
         if time.monotonic() > deadline:
-            raise RuntimeError(f"expected 3 storage pubkeys, got {len(parts)}")
+            raise RuntimeError(f"expected {count} storage pubkeys, got {len(parts)}")
         time.sleep(0.5)
 
 
@@ -81,6 +83,53 @@ def wait_for_nodes(count: int = 3, timeout: float = 25.0) -> None:
             pass
         time.sleep(0.5)
     raise RuntimeError(f"expected {count} registered storage nodes")
+
+
+def wait_offline(addr: str, timeout: float = 150.0) -> bool:
+    """Wait until `addr` shows Offline in /nodes/all.
+
+    Accelerates the health check by re-registering a live node each iteration,
+    which advances the Raft log (the offline detector is log-lag based).
+    """
+    import json as _json
+    import urllib.parse as up
+    import urllib.request as _urllib
+
+    def live_node():
+        with _urllib.urlopen("http://127.0.0.1:8001/nodes/all", timeout=3) as r:
+            nodes = _json.load(r)
+        return next((n for n in nodes if n.get("addr") != addr), None)
+
+    def register(n):
+        payload = _json.dumps(
+            {
+                "node_id": n["node_id"],
+                "capacity_bytes": 1_000_000_000_000,
+                "addr": n["addr"],
+                "relay_url": n.get("relay_url"),
+            }
+        ).encode()
+        req = _urllib.request.Request(
+            "http://127.0.0.1:8001/register",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        _urllib.urlopen(req, timeout=3)
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with _urllib.urlopen("http://127.0.0.1:8001/nodes/all", timeout=3) as r:
+                nodes = _json.load(r)
+            if any(n.get("addr") == addr and n.get("status") == "Offline" for n in nodes):
+                return True
+            node = live_node()
+            if node is not None:
+                register(node)  # advance the log so lag-based detection fires
+        except Exception:
+            pass
+        time.sleep(2.0)
+    return False
 
 
 def _client(

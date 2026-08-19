@@ -60,9 +60,12 @@ impl NodeRegistrar {
     }
 
     pub async fn run(self) {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        // 15s cadence: short enough that a live node's `last_seen`
+        // always advances between the index's 20s health polls, so the
+        // advance-based offline detector never trips on a healthy node.
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
-            interval.tick().await; // first tick is immediate (= startup registration), then every 30s
+            interval.tick().await; // first tick is immediate at startup registration, then every 15s
             if let Err(e) = self.register().await {
                 tracing::warn!("registration/heartbeat failed: {e}, will retry");
             }

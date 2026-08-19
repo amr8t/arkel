@@ -9,9 +9,11 @@
 
 use anyhow::{Result, bail};
 use blake3::Hash;
+use futures_util::future::join_all;
 use iroh::{PublicKey, SecretKey};
 use rand::seq::SliceRandom;
 use std::net::SocketAddr;
+use std::time::Duration;
 pub mod erasure;
 
 pub use erasure::{ErasureConfig, decode, encode};
@@ -209,6 +211,22 @@ async fn pull_shard(
     Ok(())
 }
 
+/// Fetch a single shard, bounded by a per-attempt timeout so a dead node can't
+/// stall the whole read. Returns an error (timeout or transport) on failure.
+async fn fetch_shard(
+    store: &iroh_blobs::api::Store,
+    endpoint: &iroh::Endpoint,
+    placement: &ShardPlacement,
+) -> Result<Vec<u8>> {
+    let hash = iroh_blobs::Hash::from(placement.blob_hash);
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        get_blob(store, endpoint, hash, placement.node_id),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("timed out"))?
+}
+
 /// Download an object: read the manifest, verify the signature, fetch k shards
 /// over iroh-blobs QUIC, and reconstruct (decrypt + EC decode + BLAKE3 verify).
 ///
@@ -238,14 +256,24 @@ pub async fn get(
     };
 
     // Teach reachable targets only — a dead node must not fail the whole read.
+    // Parallel + short per-attempt timeout: N dead nodes cost one timeout
+    // window, not N sequential stalls.
+    let mut connects = Vec::with_capacity(targets.len());
+    let mut connect_ids = Vec::with_capacity(targets.len());
     for t in &targets {
         let mut addrs = vec![iroh::TransportAddr::Ip(t.addr)];
         if let Some(url) = &t.relay_url {
             addrs.push(iroh::TransportAddr::Relay(url.parse()?));
         }
         let ea = iroh::EndpointAddr::from_parts(t.node_id, addrs);
-        if let Err(e) = endpoint.connect(ea, iroh_blobs::ALPN).await {
-            tracing::warn!("skipping unreachable storage node {}: {e}", t.node_id);
+        connect_ids.push(t.node_id);
+        connects.push(async move {
+            tokio::time::timeout(Duration::from_secs(3), endpoint.connect(ea, iroh_blobs::ALPN)).await
+        });
+    }
+    for (node_id, res) in connect_ids.iter().zip(join_all(connects).await) {
+        if let Err(e) = res {
+            tracing::warn!("skipping unreachable storage node {node_id}: {e}");
         }
     }
 
@@ -259,35 +287,57 @@ pub async fn get(
 
     let manifest = deserialize_manifest(&manifest_bytes)?;
 
-    // Read-fault-tolerant fetch: collect shards until we have k, skipping any
-    // that fail (dead node, lost shard). The m parity shards are the slack.
+    // Read-fault-tolerant fetch: fetch the k data shards in parallel (minimum
+    // egress), then substitute parity shards for any that failed. Parallelism
+    // bounds dead-node stalls to one timeout window regardless of how many
+    // nodes are down; the m parity shards are the slack.
     let total = manifest.k as usize + manifest.m as usize;
     let mut shards: Vec<Option<Vec<u8>>> = vec![None; total];
     let mut got = 0usize;
+
+    let mut futures = Vec::new();
+    let mut slots = Vec::new();
     for placement in &manifest.shards {
-        match get_blob(
-            store,
-            endpoint,
-            iroh_blobs::Hash::from(placement.blob_hash),
-            placement.node_id,
-        )
-        .await
-        {
+        if (placement.shard_index as usize) < manifest.k as usize {
+            slots.push(placement.shard_index as usize);
+            futures.push(fetch_shard(store, endpoint, placement));
+        }
+    }
+    for (slot, res) in slots.into_iter().zip(join_all(futures).await) {
+        match res {
             Ok(shard) => {
-                shards[placement.shard_index as usize] = Some(shard);
+                shards[slot] = Some(shard);
                 got += 1;
-                if got >= manifest.k as usize {
-                    break;
-                }
             }
-            Err(e) => {
-                tracing::warn!(
-                    "shard {} download failed (skipping): {e}",
-                    placement.shard_index
-                );
+            Err(e) => tracing::warn!("shard {slot} download failed (skipping): {e}"),
+        }
+    }
+
+    if got < manifest.k as usize {
+        // Substitute parity shards for the failed data shards, in parallel.
+        let mut futures = Vec::new();
+        let mut slots = Vec::new();
+        for placement in &manifest.shards {
+            if (placement.shard_index as usize) < manifest.k as usize {
+                continue;
+            }
+            slots.push(placement.shard_index as usize);
+            futures.push(fetch_shard(store, endpoint, placement));
+        }
+        for (slot, res) in slots.into_iter().zip(join_all(futures).await) {
+            if got >= manifest.k as usize {
+                break;
+            }
+            match res {
+                Ok(shard) => {
+                    shards[slot] = Some(shard);
+                    got += 1;
+                }
+                Err(e) => tracing::warn!("shard {slot} download failed (skipping): {e}"),
             }
         }
     }
+
     if got < manifest.k as usize {
         bail!("only {got} of {} shards available", manifest.k);
     }

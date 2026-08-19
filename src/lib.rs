@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use openraft::Raft;
-use openraft_rt::WatchReceiver;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -293,33 +293,39 @@ async fn run_index_node(
         .with_state(state);
     tokio::spawn(crate::api::serve_index(listener, app));
 
-    // Node Health checker
     let raft_health = raft.clone();
     let sm_health = state_machine_for_api.clone();
+    // Node Health checker: mark a node Offline after 3 consecutive 20s polls
+    // where its heartbeat's `last_seen` (raft log index) did not advance.
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut interval = tokio::time::interval(Duration::from_secs(20));
+        let mut prev: HashMap<Vec<u8>, u64> = HashMap::new();
+        let mut stale: HashMap<Vec<u8>, u32> = HashMap::new();
         loop {
             interval.tick().await;
             if !raft_health.is_leader() {
+                prev.clear();
+                stale.clear();
                 continue;
             }
-            let current = raft_health
-                .metrics()
-                .borrow_watched()
-                .last_log_index
-                .unwrap_or(0);
-            let stale: Vec<Vec<u8>> = sm_health
-                .list_node_lags()
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|(_, last)| current.saturating_sub(*last) > 5) // LAG_THRESHOLD
-                .map(|(id, _)| id)
-                .collect();
-            if !stale.is_empty() {
+            let mut offline: Vec<Vec<u8>> = Vec::new();
+            for (id, last) in sm_health.list_node_lags().await.unwrap_or_default() {
+                let unchanged = prev.get(&id) == Some(&last);
+                prev.insert(id.clone(), last);
+                if unchanged {
+                    let n = stale.entry(id.clone()).or_insert(0);
+                    *n += 1;
+                    if *n >= 3 {
+                        offline.push(id.clone());
+                    }
+                } else {
+                    stale.insert(id.clone(), 0);
+                }
+            }
+            if !offline.is_empty() {
                 raft_health
                     .client_write(crate::index::IndexNodeRequest::MarkNodesOffline {
-                        node_ids: stale,
+                        node_ids: offline,
                     })
                     .await
                     .ok();

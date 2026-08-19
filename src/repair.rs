@@ -95,8 +95,18 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
             );
             continue; // unrecoverable until a node returns
         }
-        if avail >= total && from == effective {
-            continue; // healthy and already at the effective target scheme
+        // Concentration: an object whose shards are crammed onto fewer distinct
+        // nodes than the scheme implies (e.g. explicit --storage-addrs with a
+        // small pool) is not durable the way its k/m promises. Redistribute.
+        let distinct = manifest
+            .shards
+            .iter()
+            .map(|p| p.node_id)
+            .collect::<HashSet<_>>()
+            .len();
+        let concentrated = distinct < total;
+        if avail >= total && from == effective && !concentrated {
+            continue; // healthy, at the effective target scheme, and well-spread
         }
 
         // Re-encode survivors to the effective target scheme and redistribute.
@@ -115,7 +125,9 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
             )
             .await?;
         fixed += 1;
-        tracing::info!("repaired {bucket}/{key} ({avail}/{total} shards -> {effective:?})");
+        tracing::info!(
+            "repaired {bucket}/{key} ({avail}/{total} shards on {distinct} nodes -> {effective:?})"
+        );
     }
 
     tracing::info!("repair pass complete: fixed {fixed} object(s)");

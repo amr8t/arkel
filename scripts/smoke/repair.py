@@ -12,12 +12,10 @@ Flow:
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
 import time
-import urllib.request
 
 from ._common import (
     BINARY,
@@ -28,6 +26,7 @@ from ._common import (
     put,
     random_file,
     SCRIPTS,
+    wait_offline,
 )
 
 REPAIR_DATA = REPO_ROOT / ".arkel_repair_data"
@@ -44,51 +43,6 @@ def repair_cmd(*args: str) -> subprocess.CompletedProcess:
         *args,
     ]
     return subprocess.run(cmd, capture_output=True, text=True)
-
-
-def wait_offline(addr: str, timeout: float = 60.0) -> bool:
-    """Wait until `addr` shows Offline in /nodes/all.
-
-    Accelerates the health check by re-registering a live node each iteration,
-    which advances the Raft log (the offline detector is log-lag based).
-    """
-    import urllib.parse as up
-
-    def live_node():
-        with urllib.request.urlopen("http://127.0.0.1:8001/nodes/all", timeout=3) as r:
-            nodes = json.load(r)
-        return next((n for n in nodes if n.get("addr") != addr), None)
-
-    def register(n):
-        payload = json.dumps(
-            {
-                "node_id": n["node_id"],
-                "capacity_bytes": 1_000_000_000_000,
-                "addr": n["addr"],
-                "relay_url": n.get("relay_url"),
-            }
-        ).encode()
-        req = urllib.request.Request(
-            "http://127.0.0.1:8001/register",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=3)
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            with urllib.request.urlopen("http://127.0.0.1:8001/nodes/all", timeout=3) as r:
-                nodes = json.load(r)
-            if any(n.get("addr") == addr and n.get("status") == "Offline" for n in nodes):
-                return True
-            node = live_node()
-            if node is not None:
-                register(node)  # advance the log so lag-based detection fires
-        except Exception:
-            pass
-        time.sleep(2.0)
-    return False
 
 
 def run(args) -> int:
