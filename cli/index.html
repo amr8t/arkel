@@ -57,30 +57,18 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <h6 id="options"><strong>Options:</strong></h6>
 <ul>
 <li><code>--data-dir &lt;DATA_DIR&gt;</code> — Dedicated data directory for this specific node's cryptographic identities and storage state</li>
+<li><code>--config &lt;CONFIG&gt;</code> — Node config file (arkel-node.toml); command-line flags override it</li>
 </ul>
 <h2 id="arkel-storage"><code>arkel storage</code></h2>
 <p>Boot up as a high-throughput raw block storage endpoint</p>
 <p><strong>Usage:</strong> <code>arkel storage [OPTIONS]</code></p>
 <h6 id="options-1"><strong>Options:</strong></h6>
 <ul>
-<li>
-<p><code>--private-relay-url &lt;PRIVATE_RELAY_URL&gt;</code> — Optional private Iroh relay architecture URL override</p>
-</li>
-<li>
-<p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs to register against (comma-separated; the registrar discovers the current Raft leader among them)</p>
-<p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
-</li>
-<li>
-<p><code>--addr &lt;ADDR&gt;</code> — Address the iroh QUIC endpoint binds to</p>
-<p>Default value: <code>127.0.0.1:9001</code></p>
-</li>
-<li>
-<p><code>--advertise-addr &lt;ADVERTISE_ADDR&gt;</code> — Address advertised for registration (defaults to --addr)</p>
-</li>
-<li>
-<p><code>--gc-interval-secs &lt;GC_INTERVAL_SECS&gt;</code> — How often to scan and delete unreferenced shards (seconds)</p>
-<p>Default value: <code>3600</code></p>
-</li>
+<li><code>--private-relay-url &lt;PRIVATE_RELAY_URL&gt;</code> — Optional private Iroh relay architecture URL override</li>
+<li><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs to register against (comma-separated; the registrar discovers the current Raft leader among them)</li>
+<li><code>--addr &lt;ADDR&gt;</code> — Address the iroh QUIC endpoint binds to</li>
+<li><code>--advertise-addr &lt;ADVERTISE_ADDR&gt;</code> — Address advertised for registration (defaults to --addr)</li>
+<li><code>--gc-interval-secs &lt;GC_INTERVAL_SECS&gt;</code> — How often to scan and delete unreferenced shards (seconds)</li>
 </ul>
 <h2 id="arkel-client"><code>arkel client</code></h2>
 <p>Upload/download objects as an iroh-native client</p>
@@ -225,12 +213,12 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <p><code>--register</code> — Register this identity as the repair operator (one-time), then exit</p>
 </li>
 <li>
-<p><code>--k &lt;K&gt;</code> — Re-encode target data shards (default 4)</p>
-<p>Default value: <code>4</code></p>
+<p><code>--k &lt;K&gt;</code> — Re-encode target data shards (default 8)</p>
+<p>Default value: <code>8</code></p>
 </li>
 <li>
-<p><code>--m &lt;M&gt;</code> — Re-encode target parity shards (default 2)</p>
-<p>Default value: <code>2</code></p>
+<p><code>--m &lt;M&gt;</code> — Re-encode target parity shards (default 6)</p>
+<p>Default value: <code>6</code></p>
 </li>
 <li>
 <p><code>--rate-limit &lt;RATE_LIMIT&gt;</code> — Max objects fixed per run (rate limit)</p>
