@@ -41,15 +41,29 @@ impl NodeConfig {
     }
 }
 
-/// Parse `"1TB" | "500GB" | "1048576"` into bytes.
+/// Parse `"1TB" | "500GB" | "1G" | "1048576"` into bytes.
 pub fn parse_size(s: &str) -> anyhow::Result<u64> {
     let s = s.trim().to_ascii_uppercase();
-    let (num, mult) = match s.chars().last() {
-        Some('K') => (&s[..s.len() - 1], 1024u64),
-        Some('M') => (&s[..s.len() - 1], 1024 * 1024),
-        Some('G') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
-        Some('T') => (&s[..s.len() - 1], 1024 * 1024 * 1024 * 1024),
-        _ => (s.as_str(), 1),
+    let (num, mult) = if let Some(suffix) = ["KB", "MB", "GB", "TB"]
+        .into_iter()
+        .find(|sfx| s.ends_with(sfx))
+    {
+        let m = match suffix {
+            "KB" => 1024u64,
+            "MB" => 1024 * 1024,
+            "GB" => 1024 * 1024 * 1024,
+            "TB" => 1024 * 1024 * 1024 * 1024,
+            _ => unreachable!(),
+        };
+        (&s[..s.len() - 2], m)
+    } else {
+        match s.chars().last() {
+            Some('K') => (&s[..s.len() - 1], 1024u64),
+            Some('M') => (&s[..s.len() - 1], 1024 * 1024),
+            Some('G') => (&s[..s.len() - 1], 1024 * 1024 * 1024),
+            Some('T') => (&s[..s.len() - 1], 1024 * 1024 * 1024 * 1024),
+            _ => (s.as_str(), 1),
+        }
     };
     let n: u64 = num
         .trim()

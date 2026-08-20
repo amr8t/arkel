@@ -58,6 +58,17 @@ async fn run_payment(identity: &NodeIdentity, cmd: PaymentCmd) -> Result<()> {
             .await?;
             println!("credited {bytes} bytes to {account} (ref {ref_id})");
         }
+        PaymentCmd::SetDefaultQuota { bytes, index_addrs } => {
+            let total = arkel::config::parse_size(&bytes)?;
+            arkel::index::client::set_default_quota(
+                &http,
+                &index_addrs,
+                total,
+                identity.secret_key(),
+            )
+            .await?;
+            println!("set default quota to {bytes} ({total} bytes)");
+        }
     }
     Ok(())
 }

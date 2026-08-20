@@ -48,6 +48,12 @@ pub enum IndexNodeRequest {
         ref_id: String,
         caller: Vec<u8>,
     },
+    /// Payment operator sets the cluster-wide default quota for accounts that
+    /// have no quota row yet. Idempotent upsert — the default can change later.
+    SetDefaultQuota {
+        total_bytes: u64,
+        caller: Vec<u8>,
+    },
     Batch(Vec<IndexNodeRequest>),
     RegisterNode {
         node_id: Vec<u8>,
@@ -102,6 +108,9 @@ impl fmt::Display for IndexNodeRequest {
                 ..
             } => {
                 write!(f, "AllocateQuota({}, +{}, {})", account_id, bytes, ref_id)
+            }
+            IndexNodeRequest::SetDefaultQuota { total_bytes, .. } => {
+                write!(f, "SetDefaultQuota({total_bytes})")
             }
         }
     }

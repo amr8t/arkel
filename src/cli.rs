@@ -180,6 +180,16 @@ pub enum PaymentCmd {
         #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
         index_addrs: Vec<String>,
     },
+    /// Set the cluster-wide default quota for accounts with no quota row yet
+    /// (applies at first use; idempotent upsert, changeable)
+    SetDefaultQuota {
+        /// Default quota, e.g. "1GB" (same syntax as --capacity)
+        #[arg(long)]
+        bytes: String,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+    },
 }
 
 pub fn parse_targets(addrs: &[String]) -> anyhow::Result<Vec<StorageTarget>> {

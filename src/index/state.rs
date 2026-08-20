@@ -62,6 +62,7 @@ struct StateMachineSnapshotData {
     shard_refs: Vec<(Vec<u8>, i64)>,                             // (blob_hash, refs)
     repair_operator: Option<Vec<u8>>,
     payment_operator: Option<Vec<u8>>,
+    default_quota: Option<i64>,
     quota: Vec<(String, i64, i64)>, // (account_id, total, used)
     quota_events: Vec<(String, String, String, i64, i64)>, // (source, ref_id, account_id, bytes, applied_at)
 }
@@ -74,6 +75,60 @@ struct StateMachineInner {
     snapshot_index: u64,
     current_snapshot: Option<(SnapshotMetaOf<ArkelRaftConfig>, Vec<u8>)>,
     node_registry: HashMap<Vec<u8>, NodeStats>,
+}
+
+/// Replicated roles: the single pubkey allowed to act on a scope. The two
+/// operators are cluster-global (first-wins, stored in `sm_meta`); bucket
+/// ownership is per-bucket (the `buckets.owner` column).
+enum Role<'a> {
+    PaymentOperator,
+    RepairOperator,
+    BucketOwner(&'a str),
+}
+
+impl Role<'_> {
+    /// `sm_meta` key for the cluster-global operator roles.
+    fn sm_meta_key(self) -> &'static str {
+        match self {
+            Role::PaymentOperator => "payment_operator",
+            Role::RepairOperator => "repair_operator",
+            Role::BucketOwner(_) => unreachable!("bucket owner lives in the buckets table"),
+        }
+    }
+}
+
+/// The single pubkey currently holding `role`, if any.
+fn role_holder(
+    conn: &rusqlite::Connection,
+    role: Role<'_>,
+) -> Result<Option<Vec<u8>>, io::Error> {
+    match role {
+        Role::BucketOwner(bucket) => conn
+            .query_row(
+                "SELECT owner FROM buckets WHERE name=?1",
+                params![bucket],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(to_io_err),
+        operator => conn
+            .query_row(
+                "SELECT v FROM sm_meta WHERE k = ?1",
+                params![operator.sm_meta_key()],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(to_io_err),
+    }
+}
+
+/// Is `caller` the holder of `role`?
+fn caller_has_role(
+    tx: &rusqlite::Transaction<'_>,
+    role: Role<'_>,
+    caller: &[u8],
+) -> Result<bool, io::Error> {
+    Ok(role_holder(tx, role)?.as_deref() == Some(caller))
 }
 
 const SM_SCHEMA: &str = "
@@ -155,19 +210,6 @@ impl StateMachineInner {
         })
     }
 
-    fn bucket_owner(
-        tx: &rusqlite::Transaction<'_>,
-        bucket: &str,
-    ) -> Result<Option<Vec<u8>>, io::Error> {
-        tx.query_row(
-            "SELECT owner FROM buckets WHERE name=?1",
-            params![bucket],
-            |r| r.get::<_, Vec<u8>>(0),
-        )
-        .optional()
-        .map_err(to_io_err)
-    }
-
     fn quota_row(
         tx: &rusqlite::Transaction<'_>,
         account: &str,
@@ -187,15 +229,27 @@ impl StateMachineInner {
         account: &str,
         bytes: i64,
     ) -> Result<bool, io::Error> {
-        let (total, used) = Self::quota_row(tx, account)?.unwrap_or((0, 0));
+        // Cluster-wide default quota (set by the payment operator) applies
+        // only to accounts with no quota row yet; 0 = unlimited.
+        let default_total: i64 = tx
+            .query_row(
+                "SELECT v FROM sm_meta WHERE k = 'default_quota'",
+                [],
+                |r| r.get::<_, Vec<u8>>(0),
+            )
+            .optional()
+            .map_err(to_io_err)?
+            .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok())
+            .unwrap_or(0);
+        let (total, used) = Self::quota_row(tx, account)?.unwrap_or((default_total, 0));
         if total > 0 && used + bytes > total {
             return Ok(false);
         }
         tx.execute(
             "INSERT INTO quota (account_id, total_bytes, used_bytes, created_at)
-             VALUES (?1, 0, ?2, 0)
-             ON CONFLICT(account_id) DO UPDATE SET used_bytes = used_bytes + ?2",
-            params![account, bytes],
+             VALUES (?1, ?2, ?3, 0)
+             ON CONFLICT(account_id) DO UPDATE SET used_bytes = used_bytes + ?3",
+            params![account, default_total, bytes],
         )
         .map_err(to_io_err)?;
         Ok(true)
@@ -241,7 +295,7 @@ impl StateMachineInner {
                     .unwrap_or_default()
                     .as_secs() as i64;
 
-                let owner = Self::bucket_owner(tx, &bucket)?;
+                let owner = role_holder(tx, Role::BucketOwner(&bucket))?;
                 if let Some(o) = &owner {
                     if *o != caller {
                         return Ok(IndexNodeResponse::err("forbidden"));
@@ -307,7 +361,7 @@ impl StateMachineInner {
                 created_at,
                 owner,
             } => {
-                let existing = Self::bucket_owner(tx, &name)?;
+                let existing = role_holder(tx, Role::BucketOwner(&name))?;
                 match existing {
                     Some(o) if o == owner => IndexNodeResponse::ok(),
                     Some(_) => IndexNodeResponse::err("bucket owned by another key"),
@@ -322,7 +376,7 @@ impl StateMachineInner {
                 }
             }
             IndexNodeRequest::DeleteBucket { name, caller } => {
-                if Self::bucket_owner(tx, &name)?.as_deref() != Some(caller.as_slice()) {
+                if !caller_has_role(tx, Role::BucketOwner(&name), &caller)? {
                     return Ok(IndexNodeResponse::err("forbidden"));
                 }
                 let rows = tx
@@ -350,7 +404,7 @@ impl StateMachineInner {
                 key,
                 caller,
             } => {
-                if Self::bucket_owner(tx, &bucket)?.as_deref() != Some(caller.as_slice()) {
+                if !caller_has_role(tx, Role::BucketOwner(&bucket), &caller)? {
                     return Ok(IndexNodeResponse::err("forbidden"));
                 }
                 let old_manifest: Option<crate::client::manifest::Manifest> = tx
@@ -389,20 +443,12 @@ impl StateMachineInner {
             }
 
             IndexNodeRequest::SetRepairOperator { caller } => {
-                let existing: Option<Vec<u8>> = tx
-                    .query_row(
-                        "SELECT v FROM sm_meta WHERE k = 'repair_operator'",
-                        [],
-                        |r| r.get::<_, Vec<u8>>(0),
-                    )
-                    .optional()
-                    .map_err(to_io_err)?;
-                match existing {
+                match role_holder(tx, Role::RepairOperator)? {
                     Some(_) => IndexNodeResponse::err("repair operator already set"),
                     None => {
                         tx.execute(
-                            "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('repair_operator', ?1)",
-                            params![caller],
+                            "INSERT OR REPLACE INTO sm_meta (k, v) VALUES (?1, ?2)",
+                            params![Role::RepairOperator.sm_meta_key(), caller],
                         )
                         .map_err(to_io_err)?;
                         IndexNodeResponse::ok()
@@ -418,15 +464,7 @@ impl StateMachineInner {
                 caller,
             } => {
                 // 1. Only the registered repair operator may issue repairs.
-                let operator: Option<Vec<u8>> = tx
-                    .query_row(
-                        "SELECT v FROM sm_meta WHERE k = 'repair_operator'",
-                        [],
-                        |r| r.get::<_, Vec<u8>>(0),
-                    )
-                    .optional()
-                    .map_err(to_io_err)?;
-                if operator.as_deref() != Some(caller.as_slice()) {
+                if !caller_has_role(tx, Role::RepairOperator, &caller)? {
                     return Ok(IndexNodeResponse::err("not repair operator"));
                 }
                 // 2. Race guard: must match the manifest the repair was based on.
@@ -457,7 +495,7 @@ impl StateMachineInner {
                         .map_err(to_io_err)?;
                 // Quota: account = the bucket OWNER (caller is the repair operator).
                 // Adjust usage by the ciphertext-size delta.
-                if let Some(o) = Self::bucket_owner(tx, &bucket)? {
+                if let Some(o) = role_holder(tx, Role::BucketOwner(&bucket))? {
                     let account = hex::encode(&o);
                     let delta =
                         new_manifest.ciphertext_size as i64 - old_manifest.ciphertext_size as i64;
@@ -497,20 +535,12 @@ impl StateMachineInner {
             }
 
             IndexNodeRequest::SetPaymentOperator { caller } => {
-                let existing: Option<Vec<u8>> = tx
-                    .query_row(
-                        "SELECT v FROM sm_meta WHERE k = 'payment_operator'",
-                        [],
-                        |r| r.get::<_, Vec<u8>>(0),
-                    )
-                    .optional()
-                    .map_err(to_io_err)?;
-                match existing {
+                match role_holder(tx, Role::PaymentOperator)? {
                     Some(_) => IndexNodeResponse::err("payment operator already set"),
                     None => {
                         tx.execute(
-                            "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('payment_operator', ?1)",
-                            params![caller],
+                            "INSERT OR REPLACE INTO sm_meta (k, v) VALUES (?1, ?2)",
+                            params![Role::PaymentOperator.sm_meta_key(), caller],
                         )
                         .map_err(to_io_err)?;
                         IndexNodeResponse::ok()
@@ -526,15 +556,7 @@ impl StateMachineInner {
                 caller,
             } => {
                 // 1. Only the registered payment operator may credit quota.
-                let operator: Option<Vec<u8>> = tx
-                    .query_row(
-                        "SELECT v FROM sm_meta WHERE k = 'payment_operator'",
-                        [],
-                        |r| r.get::<_, Vec<u8>>(0),
-                    )
-                    .optional()
-                    .map_err(to_io_err)?;
-                if operator.as_deref() != Some(caller.as_slice()) {
+                if !caller_has_role(tx, Role::PaymentOperator, &caller)? {
                     return Ok(IndexNodeResponse::err("not payment operator"));
                 }
                 // 2. Idempotent: (source, ref_id) seen before is a no-op.
@@ -555,6 +577,22 @@ impl StateMachineInner {
                     )
                     .map_err(to_io_err)?;
                 }
+                IndexNodeResponse::ok()
+            }
+
+            IndexNodeRequest::SetDefaultQuota {
+                total_bytes,
+                caller,
+            } => {
+                // Only the payment operator may set the cluster default.
+                if !caller_has_role(tx, Role::PaymentOperator, &caller)? {
+                    return Ok(IndexNodeResponse::err("not payment operator"));
+                }
+                tx.execute(
+                    "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('default_quota', ?1)",
+                    params![total_bytes.to_string().as_bytes().to_vec()],
+                )
+                .map_err(to_io_err)?;
                 IndexNodeResponse::ok()
             }
 
@@ -603,6 +641,7 @@ pub struct ArkelStateMachineSnapshot {
     last_applied_log: Option<LogIdOf<ArkelRaftConfig>>,
     last_membership: StoredMembershipOf<ArkelRaftConfig>,
     payment_operator: Option<Vec<u8>>,
+    default_quota: Option<i64>,
     quota: Vec<(String, i64, i64)>,
     quota_events: Vec<(String, String, String, i64, i64)>,
     snapshot_index: u64,
@@ -678,24 +717,18 @@ impl ArkelStateMachine {
                 .map_err(to_io_err)?
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(to_io_err)?,
-            repair_operator: sm
+            repair_operator: role_holder(&sm.conn, Role::RepairOperator)?,
+            payment_operator: role_holder(&sm.conn, Role::PaymentOperator)?,
+            default_quota: sm
                 .conn
                 .query_row(
-                    "SELECT v FROM sm_meta WHERE k = 'repair_operator'",
+                    "SELECT v FROM sm_meta WHERE k = 'default_quota'",
                     [],
                     |r| r.get::<_, Vec<u8>>(0),
                 )
                 .optional()
-                .map_err(to_io_err)?,
-            payment_operator: sm
-                .conn
-                .query_row(
-                    "SELECT v FROM sm_meta WHERE k = 'payment_operator'",
-                    [],
-                    |r| r.get::<_, Vec<u8>>(0),
-                )
-                .optional()
-                .map_err(to_io_err)?,
+                .map_err(to_io_err)?
+                .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok()),
             quota: sm
                 .conn
                 .prepare_cached("SELECT account_id, total_bytes, used_bytes FROM quota")
@@ -874,16 +907,34 @@ impl ArkelStateMachine {
             .collect())
     }
 
-    pub async fn account_quota(&self, account: &str) -> Result<Option<(i64, i64)>, io::Error> {
+    pub async fn account_quota(&self, account: &str) -> Result<(i64, i64), io::Error> {
         let sm = self.inner.lock().await;
-        sm.conn
+        let row = sm
+            .conn
             .query_row(
                 "SELECT total_bytes, used_bytes FROM quota WHERE account_id=?1",
                 params![account],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()
-            .map_err(to_io_err)
+            .map_err(to_io_err)?;
+        match row {
+            Some((total, used)) => Ok((total, used)),
+            None => {
+                let default_total: i64 = sm
+                    .conn
+                    .query_row(
+                        "SELECT v FROM sm_meta WHERE k = 'default_quota'",
+                        [],
+                        |r| r.get::<_, Vec<u8>>(0),
+                    )
+                    .optional()
+                    .map_err(to_io_err)?
+                    .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok())
+                    .unwrap_or(0);
+                Ok((default_total, 0))
+            }
+        }
     }
 }
 
@@ -1069,15 +1120,22 @@ impl RaftStateMachine<ArkelRaftConfig> for ArkelStateMachine {
         }
         if let Some(ref op) = snap_data.repair_operator {
             tx.execute(
-                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('repair_operator', ?1)",
-                params![op],
+                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES (?1, ?2)",
+                params![Role::RepairOperator.sm_meta_key(), op],
             )
             .map_err(to_io_err)?;
         }
         if let Some(ref op) = snap_data.payment_operator {
             tx.execute(
-                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('payment_operator', ?1)",
-                params![op],
+                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES (?1, ?2)",
+                params![Role::PaymentOperator.sm_meta_key(), op],
+            )
+            .map_err(to_io_err)?;
+        }
+        if let Some(total) = snap_data.default_quota {
+            tx.execute(
+                "INSERT OR REPLACE INTO sm_meta (k, v) VALUES ('default_quota', ?1)",
+                params![total.to_string().as_bytes().to_vec()],
             )
             .map_err(to_io_err)?;
         }
@@ -1149,6 +1207,7 @@ impl RaftSnapshotBuilder<ArkelRaftConfig> for ArkelStateMachine {
             shard_refs: snapshot.shard_refs,
             repair_operator: snapshot.repair_operator,
             payment_operator: snapshot.payment_operator,
+            default_quota: snapshot.default_quota,
             quota: snapshot.quota,
             quota_events: snapshot.quota_events,
         };

@@ -145,6 +145,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/nodes", get(list_nodes))
         .route("/nodes/all", get(list_all_nodes))
         .route("/account/quota", get(account_quota).post(credit_quota))
+        .route("/quota/default", post(set_default_quota))
         .route("/payment-operator", post(set_payment_operator))
         .route("/manifests", get(list_manifests))
         .route("/repair-operator", post(set_repair_operator))
@@ -440,19 +441,52 @@ async fn account_quota(
 ) -> impl IntoResponse {
     let account = params.get("account").cloned().unwrap_or_default();
     match state.state_machine.account_quota(&account).await {
-        Ok(Some((total, used))) => Json(serde_json::json!({
+        Ok((total, used)) => Json(serde_json::json!({
             "account": account,
             "total_bytes": total,
             "used_bytes": used,
         }))
         .into_response(),
-        Ok(None) => Json(serde_json::json!({
-            "account": account,
-            "total_bytes": 0,
-            "used_bytes": 0,
-        }))
-        .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetDefaultQuotaPayload {
+    pub total_bytes: u64,
+}
+
+async fn set_default_quota(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request("POST", "quota/default", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    let payload: SetDefaultQuotaPayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(IndexNodeResponse::err(&e.to_string())),
+            )
+                .into_response();
+        }
+    };
+    let cmd = IndexNodeRequest::SetDefaultQuota {
+        total_bytes: payload.total_bytes,
+        caller: caller.as_bytes().to_vec(),
+    };
+    match state.batch_collector.enqueue(cmd).await {
+        Ok(data) => (StatusCode::OK, Json(data)).into_response(),
+        Err(e) => {
+            let resp = IndexNodeResponse::err(&format!("batch enqueue error: {}", e));
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(resp)).into_response()
+        }
     }
 }
 

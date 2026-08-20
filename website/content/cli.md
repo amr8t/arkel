@@ -30,6 +30,7 @@ This document contains the help content for the `arkel` command-line program.
 * [`arkel payment`↴](#arkel-payment)
 * [`arkel payment register`↴](#arkel-payment-register)
 * [`arkel payment credit`↴](#arkel-payment-credit)
+* [`arkel payment set-default-quota`↴](#arkel-payment-set-default-quota)
 * [`arkel repair`↴](#arkel-repair)
 
 ## `arkel`
@@ -183,6 +184,7 @@ Payment-operator tooling (register the quota credit key; first-wins)
 
 * `register` — Register this identity as the payment operator (one-time, first-wins)
 * `credit` — Credit quota to an account (idempotent on --ref-id)
+* `set-default-quota` — Set the cluster-wide default quota for accounts with no quota row yet (applies at first use; idempotent upsert, changeable)
 
 
 
@@ -214,6 +216,21 @@ Credit quota to an account (idempotent on --ref-id)
 
   Default value: `payment`
 * `--ref-id <REF_ID>` — Idempotency reference (e.g. Stripe checkout id); replay is a no-op
+* `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs (comma-separated)
+
+  Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`
+
+
+
+## `arkel payment set-default-quota`
+
+Set the cluster-wide default quota for accounts with no quota row yet (applies at first use; idempotent upsert, changeable)
+
+**Usage:** `arkel payment set-default-quota [OPTIONS] --bytes <BYTES>`
+
+###### **Options:**
+
+* `--bytes <BYTES>` — Default quota, e.g. "1GB" (same syntax as --capacity)
 * `--index-addrs <INDEX_ADDRS>` — Index node HTTP URLs (comma-separated)
 
   Default value: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`

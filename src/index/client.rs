@@ -364,3 +364,21 @@ pub async fn credit_quota(
     )
     .await
 }
+
+/// Payment operator sets the cluster-wide default quota (bytes) for accounts
+/// with no quota row yet. Idempotent upsert — can be re-issued to change it.
+pub async fn set_default_quota(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    total_bytes: u64,
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    index_write(
+        http,
+        index_addrs,
+        "quota/default",
+        &serde_json::json!({ "total_bytes": total_bytes }),
+        secret_key,
+    )
+    .await
+}

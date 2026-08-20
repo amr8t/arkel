@@ -31,8 +31,10 @@ from ._common import (
 PAYMENT_DATA = REPO_ROOT / ".arkel_quota_data"
 CLIENT_A = REPO_ROOT / ".arkel_client_data"
 CLIENT_C = REPO_ROOT / ".arkel_client_c_data"
+CLIENT_D = REPO_ROOT / ".arkel_client_d_data"
 
 CREDIT_BYTES = 2 * 1024 * 1024
+DEFAULT_BYTES = 1 * 1024 * 1024
 
 
 def _expect_fail(fn, label: str) -> bool:
@@ -82,6 +84,7 @@ def run(args) -> int:
     shutil.rmtree(PAYMENT_DATA, ignore_errors=True)
     shutil.rmtree(CLIENT_A, ignore_errors=True)
     shutil.rmtree(CLIENT_C, ignore_errors=True)
+    shutil.rmtree(CLIENT_D, ignore_errors=True)
     bring_up_network()
 
     r = payment("register", "--index-addrs", INDEX_FLAG, data_dir=PAYMENT_DATA)
@@ -163,10 +166,72 @@ def run(args) -> int:
         return 1
     print("[smoke:account] idempotent re-credit: total unchanged")
 
+    # ---- default quota ----
+    r = payment(
+        "set-default-quota",
+        "--bytes",
+        "1MB",
+        "--index-addrs",
+        INDEX_FLAG,
+        data_dir=PAYMENT_DATA,
+    )
+    if r.returncode != 0:
+        print(f"[smoke:account] FAIL: set-default-quota: {r.stderr.strip()[-300:]}")
+        return 1
+    print("[smoke:account] set cluster default quota to 1MB")
+
+    ok &= _expect_fail(
+        lambda: _set_default_or_raise(CLIENT_C),
+        "non-operator set-default-quota",
+    )
+
+    acct_d, used_d, total_d = account_quota(CLIENT_D)
+    if used_d != 0 or total_d != DEFAULT_BYTES:
+        print(f"[smoke:account] FAIL: fresh account should get default quota, "
+              f"got used={used_d} total={total_d}")
+        return 1
+    print(f"[smoke:account] fresh identity {acct_d[:16]}... sees default quota "
+          f"{total_d} bytes")
+
+    put("smoke_d", "half.bin", random_file(512 * 1024), data_dir=CLIENT_D)
+    print("[smoke:account] D put 0.5MB OK (within default)")
+
+    ok &= _expect_fail(
+        lambda: put("smoke_d", "over.bin", random_file(1024 * 1024), data_dir=CLIENT_D),
+        "D put 1MB over 1MB default (507)",
+    )
+
+    r = payment(
+        "credit",
+        "--account",
+        acct_d,
+        "--bytes",
+        str(DEFAULT_BYTES),
+        "--source",
+        "grant",
+        "--ref-id",
+        "smoke-default-1",
+        "--index-addrs",
+        INDEX_FLAG,
+        data_dir=PAYMENT_DATA,
+    )
+    if r.returncode != 0:
+        print(f"[smoke:account] FAIL: credit D: {r.stderr.strip()[-300:]}")
+        return 1
+    _, _, total_d2 = account_quota(CLIENT_D)
+    if total_d2 != 2 * DEFAULT_BYTES:
+        print(f"[smoke:account] FAIL: AllocateQuota should top up default to "
+              f"{2 * DEFAULT_BYTES}, got {total_d2}")
+        return 1
+    print("[smoke:account] AllocateQuota topped up default quota (default + 1MB)")
+
+    put("smoke_d", "more.bin", random_file(1024 * 1024), data_dir=CLIENT_D)
+    print("[smoke:account] D put 1MB OK (within topped-up quota)")
+
     if ok:
         print(
             "[smoke:account] PASS: credit, debit, 507, release, idempotency, "
-            "non-operator rejection all correct"
+            "non-operator rejection, default quota all correct"
         )
         return 0
     print("[smoke:account] FAIL: one or more checks failed")
@@ -184,6 +249,19 @@ def _credit_or_raise(data_dir: Path, account: str, ref_id: str) -> None:
         "grant",
         "--ref-id",
         ref_id,
+        "--index-addrs",
+        INDEX_FLAG,
+        data_dir=data_dir,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip()[-300:])
+
+
+def _set_default_or_raise(data_dir: Path) -> None:
+    r = payment(
+        "set-default-quota",
+        "--bytes",
+        "1MB",
         "--index-addrs",
         INDEX_FLAG,
         data_dir=data_dir,
