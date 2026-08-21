@@ -98,10 +98,7 @@ impl Role<'_> {
 }
 
 /// The single pubkey currently holding `role`, if any.
-fn role_holder(
-    conn: &rusqlite::Connection,
-    role: Role<'_>,
-) -> Result<Option<Vec<u8>>, io::Error> {
+fn role_holder(conn: &rusqlite::Connection, role: Role<'_>) -> Result<Option<Vec<u8>>, io::Error> {
     match role {
         Role::BucketOwner(bucket) => conn
             .query_row(
@@ -232,11 +229,9 @@ impl StateMachineInner {
         // Cluster-wide default quota (set by the payment operator) applies
         // only to accounts with no quota row yet; 0 = unlimited.
         let default_total: i64 = tx
-            .query_row(
-                "SELECT v FROM sm_meta WHERE k = 'default_quota'",
-                [],
-                |r| r.get::<_, Vec<u8>>(0),
-            )
+            .query_row("SELECT v FROM sm_meta WHERE k = 'default_quota'", [], |r| {
+                r.get::<_, Vec<u8>>(0)
+            })
             .optional()
             .map_err(to_io_err)?
             .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok())
@@ -256,11 +251,7 @@ impl StateMachineInner {
     }
 
     /// Release `bytes` back to `account` (floor 0).
-    fn release(
-        tx: &rusqlite::Transaction<'_>,
-        account: &str,
-        bytes: i64,
-    ) -> Result<(), io::Error> {
+    fn release(tx: &rusqlite::Transaction<'_>, account: &str, bytes: i64) -> Result<(), io::Error> {
         tx.execute(
             "UPDATE quota SET used_bytes = MAX(used_bytes - ?2, 0) WHERE account_id=?1",
             params![account, bytes],
@@ -301,12 +292,14 @@ impl StateMachineInner {
                         return Ok(IndexNodeResponse::err("forbidden"));
                     }
                 }
-                let new_manifest =
-                    crate::client::manifest::deserialize_manifest(&manifest_bytes)
-                        .map_err(to_io_err)?;
+                let new_manifest = crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                    .map_err(to_io_err)?;
                 // Quota: account = caller (enforced == owner). 507 over limit.
-                if !Self::try_debit(tx, &hex::encode(&caller), new_manifest.ciphertext_size as i64)?
-                {
+                if !Self::try_debit(
+                    tx,
+                    &hex::encode(&caller),
+                    new_manifest.ciphertext_size as i64,
+                )? {
                     return Ok(IndexNodeResponse::err("507 insufficient storage"));
                 }
 
@@ -490,9 +483,8 @@ impl StateMachineInner {
                     .map_err(to_io_err)?;
                 let old_manifest =
                     crate::client::manifest::deserialize_manifest(&old).map_err(to_io_err)?;
-                let new_manifest =
-                    crate::client::manifest::deserialize_manifest(&manifest_bytes)
-                        .map_err(to_io_err)?;
+                let new_manifest = crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                    .map_err(to_io_err)?;
                 // Quota: account = the bucket OWNER (caller is the repair operator).
                 // Adjust usage by the ciphertext-size delta.
                 if let Some(o) = role_holder(tx, Role::BucketOwner(&bucket))? {
@@ -596,12 +588,45 @@ impl StateMachineInner {
                 IndexNodeResponse::ok()
             }
 
+            IndexNodeRequest::ContributionGrant {
+                account_id,
+                bytes,
+                source,
+                ref_id,
+            } => {
+                let applied = tx
+                    .execute(
+                        "INSERT INTO quota_events (source, ref_id, account_id, bytes, applied_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5)
+                         ON CONFLICT(source, ref_id) DO NOTHING",
+                        params![source, ref_id, account_id, bytes as i64, log_index as i64],
+                    )
+                    .map_err(to_io_err)?;
+                if applied > 0 {
+                    tx.execute(
+                        "INSERT INTO quota (account_id, total_bytes, used_bytes, created_at)
+                         VALUES (?1, ?2, 0, ?3)
+                         ON CONFLICT(account_id) DO UPDATE SET total_bytes = total_bytes + ?2",
+                        params![account_id, bytes as i64, log_index as i64],
+                    )
+                    .map_err(to_io_err)?;
+                }
+                IndexNodeResponse::ok()
+            }
+
             IndexNodeRequest::RegisterNode {
                 node_id,
                 capacity_bytes,
                 addr,
                 relay_url,
+                registered_at,
             } => {
+                // Keep `registered_at` from the FIRST registration so a reboot
+                // doesn't reset the contribution-grant 24h clock.
+                let first_registered_at = node_registry
+                    .get(&node_id)
+                    .map(|ns| ns.registered_at)
+                    .unwrap_or(registered_at);
                 node_registry.insert(
                     node_id.clone(),
                     NodeStats {
@@ -610,6 +635,7 @@ impl StateMachineInner {
                         addr,
                         relay_url,
                         last_seen: log_index,
+                        registered_at: first_registered_at,
                         status: NodeStatus::Online,
                     },
                 );
@@ -721,11 +747,9 @@ impl ArkelStateMachine {
             payment_operator: role_holder(&sm.conn, Role::PaymentOperator)?,
             default_quota: sm
                 .conn
-                .query_row(
-                    "SELECT v FROM sm_meta WHERE k = 'default_quota'",
-                    [],
-                    |r| r.get::<_, Vec<u8>>(0),
-                )
+                .query_row("SELECT v FROM sm_meta WHERE k = 'default_quota'", [], |r| {
+                    r.get::<_, Vec<u8>>(0)
+                })
                 .optional()
                 .map_err(to_io_err)?
                 .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok()),
@@ -923,11 +947,9 @@ impl ArkelStateMachine {
             None => {
                 let default_total: i64 = sm
                     .conn
-                    .query_row(
-                        "SELECT v FROM sm_meta WHERE k = 'default_quota'",
-                        [],
-                        |r| r.get::<_, Vec<u8>>(0),
-                    )
+                    .query_row("SELECT v FROM sm_meta WHERE k = 'default_quota'", [], |r| {
+                        r.get::<_, Vec<u8>>(0)
+                    })
                     .optional()
                     .map_err(to_io_err)?
                     .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok())
@@ -935,6 +957,66 @@ impl ArkelStateMachine {
                 Ok((default_total, 0))
             }
         }
+    }
+
+    pub async fn list_all_node_stats(&self) -> Result<Vec<(Vec<u8>, NodeStats)>, io::Error> {
+        let sm = self.inner.lock().await;
+        Ok(sm
+            .node_registry
+            .iter()
+            .map(|(id, ns)| (id.clone(), ns.clone()))
+            .collect())
+    }
+
+    /// Derive each node's occupied bytes from manifests:
+    /// `Σ ceil(ciphertext_size/k)` over every placement the node holds.
+    pub async fn node_usage(&self) -> Result<HashMap<Vec<u8>, u64>, io::Error> {
+        let sm = self.inner.lock().await;
+        let mut stmt = sm
+            .conn
+            .prepare_cached("SELECT manifest FROM manifests")
+            .map_err(to_io_err)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))
+            .map_err(to_io_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(to_io_err)?;
+        let mut usage: HashMap<Vec<u8>, u64> = HashMap::new();
+        for mb in rows {
+            let m = crate::client::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
+            let shard_size = m.ciphertext_size.div_ceil(m.k as u64);
+            for p in &m.shards {
+                *usage.entry(p.node_id.as_bytes().to_vec()).or_default() += shard_size;
+            }
+        }
+        Ok(usage)
+    }
+
+    /// Random sample of (node_id bytes, blob_hash bytes) placements from manifests.
+    pub async fn sample_placements(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(Vec<u8>, [u8; 32])>, io::Error> {
+        let sm = self.inner.lock().await;
+        let mut stmt = sm
+            .conn
+            .prepare_cached("SELECT manifest FROM manifests")
+            .map_err(to_io_err)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))
+            .map_err(to_io_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(to_io_err)?;
+        let mut placements: Vec<(Vec<u8>, [u8; 32])> = Vec::new();
+        for mb in rows {
+            let m = crate::client::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
+            for p in &m.shards {
+                placements.push((p.node_id.as_bytes().to_vec(), p.blob_hash));
+            }
+        }
+        use rand::seq::SliceRandom;
+        placements.shuffle(&mut rand::thread_rng());
+        Ok(placements.into_iter().take(limit).collect())
     }
 }
 

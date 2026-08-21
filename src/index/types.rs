@@ -48,6 +48,12 @@ pub enum IndexNodeRequest {
         ref_id: String,
         caller: Vec<u8>,
     },
+    ContributionGrant {
+        account_id: String,
+        bytes: u64,
+        source: String,
+        ref_id: String,
+    },
     /// Payment operator sets the cluster-wide default quota for accounts that
     /// have no quota row yet. Idempotent upsert — the default can change later.
     SetDefaultQuota {
@@ -60,6 +66,7 @@ pub enum IndexNodeRequest {
         capacity_bytes: u64,
         addr: String,
         relay_url: Option<String>,
+        registered_at: u64,
     },
     MarkNodesOffline {
         node_ids: Vec<Vec<u8>>,
@@ -108,6 +115,18 @@ impl fmt::Display for IndexNodeRequest {
                 ..
             } => {
                 write!(f, "AllocateQuota({}, +{}, {})", account_id, bytes, ref_id)
+            }
+            IndexNodeRequest::ContributionGrant {
+                account_id,
+                bytes,
+                ref_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "ContributionGrant({}, +{}, {})",
+                    account_id, bytes, ref_id
+                )
             }
             IndexNodeRequest::SetDefaultQuota { total_bytes, .. } => {
                 write!(f, "SetDefaultQuota({total_bytes})")
@@ -165,7 +184,8 @@ pub struct NodeStats {
     pub capacity_bytes: u64,
     pub addr: String,
     pub relay_url: Option<String>,
-    pub last_seen: u64, // Raft log index of last heartbeat
+    pub last_seen: u64,     // Raft log index of last heartbeat
+    pub registered_at: u64, // wall-clock secs sent by the node at registration
     pub status: NodeStatus,
 }
 

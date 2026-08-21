@@ -179,6 +179,8 @@ pub struct HealthyNode {
     pub node_id: iroh::PublicKey,
     pub addr: SocketAddr,
     pub relay_url: Option<String>,
+    pub capacity_bytes: u64,
+    pub occupied_bytes: u64,
 }
 pub async fn list_healthy_nodes(
     http: &reqwest::Client,
@@ -195,6 +197,8 @@ pub async fn list_healthy_nodes(
                 node_id: node_id.parse()?,
                 addr: addr.parse()?,
                 relay_url,
+                capacity_bytes: n["capacity_bytes"].as_u64().unwrap_or(0),
+                occupied_bytes: n["occupied_bytes"].as_u64().unwrap_or(0),
             })
         })
         .collect()

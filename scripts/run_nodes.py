@@ -939,6 +939,8 @@ def cmd_start_storage(args: argparse.Namespace) -> int:
             "--gc-interval-secs",
             str(args.gc_interval_secs),
         ]
+        if args.capacity:
+            cmd += ["--capacity", args.capacity]
         with open(node.log_path, "w") as logfile:
             node.process = subprocess.Popen(
                 cmd,
@@ -1090,6 +1092,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=3600,
         help="Shard GC sweep interval in seconds (default: 3600)",
+    )
+    storage_parser.add_argument(
+        "--capacity",
+        type=str,
+        default="",
+        help="Storage allocation (e.g. 1TB) passed to each storage node",
     )
 
     # smoke

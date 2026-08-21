@@ -205,6 +205,7 @@ async fn register_node(
         capacity_bytes: payload.capacity_bytes,
         addr: payload.addr,
         relay_url: payload.relay_url,
+        registered_at: payload.registered_at,
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -372,6 +373,7 @@ pub struct RegisterNodePayload {
     pub capacity_bytes: u64,
     pub addr: String,
     pub relay_url: Option<String>,
+    pub registered_at: u64,
 }
 
 async fn read_manifest(
@@ -461,7 +463,8 @@ async fn set_default_quota(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("POST", "quota/default", &body, &headers) {
+    let caller = match crate::index::auth::verify_request("POST", "quota/default", &body, &headers)
+    {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -520,23 +523,32 @@ pub struct RegisterNode {
     pub node_id: String,
     pub addr: String,
     pub relay_url: Option<String>,
+    pub capacity_bytes: u64,
+    pub occupied_bytes: u64,
 }
 
 async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.state_machine.get_healthy_nodes(64).await {
-        Ok(nodes) => {
-            let nodes: Vec<RegisterNode> = nodes
-                .into_iter()
-                .map(|(node_id, addr, relay_url)| RegisterNode {
-                    node_id: hex::encode(node_id),
-                    addr,
-                    relay_url,
-                })
-                .collect();
-            Json(nodes).into_response()
+    let (stats, usage) = match (
+        state.state_machine.list_all_node_stats().await,
+        state.state_machine.node_usage().await,
+    ) {
+        (Ok(stats), Ok(usage)) => (stats, usage),
+        (Err(e), _) | (_, Err(e)) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    };
+    let nodes: Vec<RegisterNode> = stats
+        .into_iter()
+        .filter(|(_, ns)| ns.status == crate::index::types::NodeStatus::Online)
+        .map(|(node_id, ns)| RegisterNode {
+            node_id: hex::encode(&node_id),
+            addr: ns.addr,
+            relay_url: ns.relay_url,
+            capacity_bytes: ns.capacity_bytes,
+            occupied_bytes: usage.get(&node_id).copied().unwrap_or(0),
+        })
+        .collect();
+    Json(nodes).into_response()
 }
 
 /// All registered nodes with their Online/Offline status — repair's health map.

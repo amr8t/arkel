@@ -9,6 +9,7 @@ use std::time::Duration;
 use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 
 pub mod api;
+pub mod audit;
 pub mod cli;
 pub mod client;
 pub mod config;
@@ -43,6 +44,7 @@ pub enum NodeMode {
         index_addrs: Vec<String>,
         addr: SocketAddr,
         advertise_addr: Option<SocketAddr>,
+        capacity_bytes: u64,
     },
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -138,27 +140,37 @@ impl Arkel {
             }
 
             ArkelNodeType::Storage => {
-                let (base_dir, blobs, store, _private_relay_url, index_addrs, addr, advertise_addr) =
-                    match mode {
-                        NodeMode::Storage {
-                            base_dir,
-                            blobs,
-                            store,
-                            private_relay_url,
-                            index_addrs,
-                            addr,
-                            advertise_addr,
-                        } => (
-                            base_dir,
-                            blobs,
-                            store,
-                            private_relay_url,
-                            index_addrs,
-                            addr,
-                            advertise_addr,
-                        ),
-                        _ => unreachable!(),
-                    };
+                let (
+                    base_dir,
+                    blobs,
+                    store,
+                    _private_relay_url,
+                    index_addrs,
+                    addr,
+                    advertise_addr,
+                    capacity_bytes,
+                ) = match mode {
+                    NodeMode::Storage {
+                        base_dir,
+                        blobs,
+                        store,
+                        private_relay_url,
+                        index_addrs,
+                        addr,
+                        advertise_addr,
+                        capacity_bytes,
+                    } => (
+                        base_dir,
+                        blobs,
+                        store,
+                        private_relay_url,
+                        index_addrs,
+                        addr,
+                        advertise_addr,
+                        capacity_bytes,
+                    ),
+                    _ => unreachable!(),
+                };
 
                 let shard_dir = base_dir.join("shards");
                 tokio::fs::create_dir_all(&shard_dir).await?;
@@ -187,7 +199,7 @@ impl Arkel {
 
                 let registrar = NodeRegistrar::new(
                     &self.identity,
-                    1_000_000_000_000, // 1 TB default capacity
+                    capacity_bytes,
                     advertise_addr.unwrap_or(addr),
                     index_addrs,
                     relay_url,
@@ -333,6 +345,75 @@ async fn run_index_node(
             }
         }
     });
+
+    // Contribution grant: leader-only, online ≥ grace → ratio × contributed.
+    // Env-tunable so smokes run fast (ARKEL_GRANT_INTERVAL_SECS,
+    // ARKEL_CONTRIBUTION_GRACE_SECS, ARKEL_CONTRIBUTION_RATIO).
+    let raft_grant = raft.clone();
+    let sm_grant = state_machine_for_api.clone();
+    tokio::spawn(async move {
+        let ratio: f64 = std::env::var("ARKEL_CONTRIBUTION_RATIO")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.57);
+        let grace: u64 = std::env::var("ARKEL_CONTRIBUTION_GRACE_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(24 * 3600);
+        let mut interval = tokio::time::interval(Duration::from_secs(
+            std::env::var("ARKEL_GRANT_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3600),
+        ));
+        loop {
+            interval.tick().await;
+            if !raft_grant.is_leader() {
+                continue;
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let nodes = sm_grant.list_all_node_stats().await.unwrap_or_default();
+            let usage = sm_grant.node_usage().await.unwrap_or_default();
+            for (id, ns) in nodes {
+                if ns.status != crate::index::types::NodeStatus::Online {
+                    continue;
+                }
+                if now.saturating_sub(ns.registered_at) < grace {
+                    continue;
+                }
+                // Storj-style: earn on real stored bytes (derived from
+                // manifests), capped at the node's declared allocation.
+                let occupied = usage.get(&id).copied().unwrap_or(0).min(ns.capacity_bytes);
+                if occupied == 0 {
+                    continue;
+                }
+                let bytes = (occupied as f64 * ratio) as u64;
+                let ref_id = format!("contribution-{}-{}", hex::encode(&id), now / 3600);
+                raft_grant
+                    .client_write(crate::index::IndexNodeRequest::ContributionGrant {
+                        account_id: hex::encode(&id),
+                        bytes,
+                        source: "contribution".to_string(),
+                        ref_id,
+                    })
+                    .await
+                    .ok();
+            }
+        }
+    });
+
+    // Audit: leader-only, samples placements and fetches them to prove holding.
+    let audit_store: iroh_blobs::api::Store =
+        iroh_blobs::store::fs::FsStore::load(arkel.data_dir.join("audit_store"))
+            .await?
+            .into();
+    let raft_audit = raft.clone();
+    let sm_audit = state_machine_for_api.clone();
+    let ep_audit = endpoint.clone();
+    tokio::spawn(async move { crate::audit::run(raft_audit, sm_audit, ep_audit, audit_store).await });
 
     // Keep the Iroh endpoint alive for future gateway<->storage use.
     let _endpoint = endpoint;

@@ -67,6 +67,7 @@ Boot up as a high-throughput raw block storage endpoint
 * `--addr <ADDR>` — Address the iroh QUIC endpoint binds to
 * `--advertise-addr <ADVERTISE_ADDR>` — Address advertised for registration (defaults to --addr)
 * `--gc-interval-secs <GC_INTERVAL_SECS>` — How often to scan and delete unreferenced shards (seconds)
+* `--capacity <CAPACITY>` — Storage allocation this node commits to the network; the index fills it and pays against real stored bytes (default 1TB)
 
 
 

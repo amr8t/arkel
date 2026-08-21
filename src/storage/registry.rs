@@ -46,6 +46,10 @@ impl NodeRegistrar {
             "capacity_bytes": self.capacity_bytes,
             "addr": self.addr.to_string(),
             "relay_url": self.relay_url,
+             "registered_at": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         });
         index_write(
             &self.http,

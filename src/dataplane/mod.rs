@@ -268,7 +268,11 @@ pub async fn get(
         let ea = iroh::EndpointAddr::from_parts(t.node_id, addrs);
         connect_ids.push(t.node_id);
         connects.push(async move {
-            tokio::time::timeout(Duration::from_secs(3), endpoint.connect(ea, iroh_blobs::ALPN)).await
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                endpoint.connect(ea, iroh_blobs::ALPN),
+            )
+            .await
         });
     }
     for (node_id, res) in connect_ids.iter().zip(join_all(connects).await) {
@@ -374,7 +378,14 @@ pub async fn assign_shards(cfg: &DataPlaneConfig) -> Result<(ErasureConfig, Vec<
     };
     let ec = ErasureConfig { k, m };
     let mut chosen: Vec<_> = pool.iter().collect();
+    // Random first, then stable-sort by utilization so equal-usage nodes stay
+    // random while full ones sink to the back (best-effort; 0s are fine).
     chosen.shuffle(&mut rand::thread_rng());
+    chosen.sort_by(|a, b| {
+        let ua = a.occupied_bytes as f64 / a.capacity_bytes.max(1) as f64;
+        let ub = b.occupied_bytes as f64 / b.capacity_bytes.max(1) as f64;
+        ua.total_cmp(&ub)
+    });
     let targets = chosen
         .into_iter()
         .take(total)

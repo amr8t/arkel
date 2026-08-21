@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use arkel::{
     Arkel, BootstrapConfig, NodeMode,
-    client::{Client as ArkelClient, ClientConfig},
     cli::{AccountCmd, Cli, ClientCmd, Commands, PaymentCmd, erasure_config, parse_targets},
+    client::{Client as ArkelClient, ClientConfig},
     dataplane::ErasureConfig,
     identity::NodeIdentity,
 };
@@ -14,7 +14,10 @@ use std::sync::Arc;
 
 async fn run_account(identity: &NodeIdentity, cmd: AccountCmd) -> Result<()> {
     match cmd {
-        AccountCmd::Quota { account, index_addrs } => {
+        AccountCmd::Quota {
+            account,
+            index_addrs,
+        } => {
             let account = account.unwrap_or_else(|| hex::encode(identity.node_id().as_bytes()));
             let http = reqwest::Client::new();
             let (total, used) =
@@ -31,12 +34,8 @@ async fn run_payment(identity: &NodeIdentity, cmd: PaymentCmd) -> Result<()> {
     let http = reqwest::Client::new();
     match cmd {
         PaymentCmd::Register { index_addrs } => {
-            arkel::index::client::set_payment_operator(
-                &http,
-                &index_addrs,
-                identity.secret_key(),
-            )
-            .await?;
+            arkel::index::client::set_payment_operator(&http, &index_addrs, identity.secret_key())
+                .await?;
             println!("registered payment operator: {}", identity.node_id());
         }
         PaymentCmd::Credit {
@@ -241,16 +240,15 @@ async fn main() -> Result<()> {
             http_addr,
             peer_addresses,
         } => {
-            let http_addr = arkel::config::resolve_addr(
-                http_addr,
-                cfg_index.http_addr,
-                "127.0.0.1:8001",
-            )?;
+            let http_addr =
+                arkel::config::resolve_addr(http_addr, cfg_index.http_addr, "127.0.0.1:8001")?;
             let peers = peer_addresses.or(cfg_index.peers).unwrap_or_default();
             let base = cli_data_dir
                 .clone()
                 .or(cfg_index.data_dir.clone().map(PathBuf::from))
-                .unwrap_or_else(|| PathBuf::from(format!("./.arkel_index_{}_data", http_addr.port())));
+                .unwrap_or_else(|| {
+                    PathBuf::from(format!("./.arkel_index_{}_data", http_addr.port()))
+                });
             let arkel = Arkel::init(base).await?;
             let node_id = arkel.identity.raft_node_id();
             let my_full_addr = arkel.identity.raft_full_addr(http_addr);
@@ -285,6 +283,7 @@ async fn main() -> Result<()> {
             addr,
             advertise_addr,
             gc_interval_secs,
+            capacity,
         } => {
             let addr = arkel::config::resolve_addr(addr, cfg_storage.addr, "127.0.0.1:9001")?;
             let advertise_addr = advertise_addr.or_else(|| {
@@ -293,17 +292,23 @@ async fn main() -> Result<()> {
                     .as_deref()
                     .and_then(|s| s.parse::<SocketAddr>().ok())
             });
-            let index_addrs = index_addrs
-                .or(cfg_storage.index_addrs)
-                .unwrap_or_else(|| {
-                    arkel::cli::DEFAULT_INDEX_ADDRS
-                        .split(',')
-                        .map(String::from)
-                        .collect()
-                });
+            let index_addrs = index_addrs.or(cfg_storage.index_addrs).unwrap_or_else(|| {
+                arkel::cli::DEFAULT_INDEX_ADDRS
+                    .split(',')
+                    .map(String::from)
+                    .collect()
+            });
             let gc_interval_secs = gc_interval_secs
                 .or(cfg_storage.gc_interval_secs)
                 .unwrap_or(3600);
+            let capacity = capacity
+                .or_else(|| {
+                    cfg_storage
+                        .capacity
+                        .as_deref()
+                        .and_then(|s| arkel::config::parse_size(s).ok())
+                })
+                .unwrap_or(1_000_000_000_000); // 1 TB default
             let base = cli_data_dir
                 .clone()
                 .or(cfg_storage.data_dir.clone().map(PathBuf::from))
@@ -422,6 +427,7 @@ async fn main() -> Result<()> {
                     index_addrs,
                     addr,
                     advertise_addr,
+                    capacity_bytes: capacity,
                 })
                 .await;
         }

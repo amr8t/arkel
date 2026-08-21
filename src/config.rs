@@ -26,10 +26,9 @@ pub struct StorageConfig {
     pub advertise_addr: Option<String>,
     pub data_dir: Option<String>,
     pub index_addrs: Option<Vec<String>>,
-    /// Physical ceiling, e.g. "1TB" / "500GB" (same syntax as --capacity).
+    /// Physical allocation this node commits to the network, e.g. "1TB"
+    /// (same syntax as --capacity).
     pub capacity: Option<String>,
-    /// Credited allocation, e.g. "500GB" (same syntax as --contribute).
-    pub contribute: Option<String>,
     pub gc_interval_secs: Option<u64>,
 }
 

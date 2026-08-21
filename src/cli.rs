@@ -6,6 +6,7 @@ use iroh::PublicKey;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use crate::config::parse_size;
 use crate::dataplane::StorageTarget;
 
 pub const DEFAULT_INDEX_ADDRS: &str =
@@ -64,6 +65,10 @@ pub enum Commands {
         /// How often to scan and delete unreferenced shards (seconds).
         #[arg(long)]
         gc_interval_secs: Option<u64>,
+        /// Storage allocation this node commits to the network; the index fills
+        /// it and pays against real stored bytes (default 1TB).
+        #[arg(long, value_parser = parse_size)]
+        capacity: Option<u64>,
     },
     /// Upload/download objects as an iroh-native client
     Client {
