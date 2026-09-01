@@ -41,6 +41,7 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment"><code>arkel payment</code>↴</a></li>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment-register"><code>arkel payment register</code>↴</a></li>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment-credit"><code>arkel payment credit</code>↴</a></li>
+<li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-payment-set-default-quota"><code>arkel payment set-default-quota</code>↴</a></li>
 <li><a href="https://amr8t.github.io/arkelstore/cli/#arkel-repair"><code>arkel repair</code>↴</a></li>
 </ul>
 <h2 id="arkel"><code>arkel</code></h2>
@@ -69,6 +70,7 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <li><code>--addr &lt;ADDR&gt;</code> — Address the iroh QUIC endpoint binds to</li>
 <li><code>--advertise-addr &lt;ADVERTISE_ADDR&gt;</code> — Address advertised for registration (defaults to --addr)</li>
 <li><code>--gc-interval-secs &lt;GC_INTERVAL_SECS&gt;</code> — How often to scan and delete unreferenced shards (seconds)</li>
+<li><code>--capacity &lt;CAPACITY&gt;</code> — Storage allocation this node commits to the network; the index fills it and pays against real stored bytes (default 1TB)</li>
 </ul>
 <h2 id="arkel-client"><code>arkel client</code></h2>
 <p>Upload/download objects as an iroh-native client</p>
@@ -166,6 +168,7 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <ul>
 <li><code>register</code> — Register this identity as the payment operator (one-time, first-wins)</li>
 <li><code>credit</code> — Credit quota to an account (idempotent on --ref-id)</li>
+<li><code>set-default-quota</code> — Set the cluster-wide default quota for accounts with no quota row yet (applies at first use; idempotent upsert, changeable)</li>
 </ul>
 <h2 id="arkel-payment-register"><code>arkel payment register</code></h2>
 <p>Register this identity as the payment operator (one-time, first-wins)</p>
@@ -200,10 +203,23 @@ and storage state). Defaults to <code>./.arkel_&lt;mode&gt;_data</code>.</p>
 <p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
 </li>
 </ul>
+<h2 id="arkel-payment-set-default-quota"><code>arkel payment set-default-quota</code></h2>
+<p>Set the cluster-wide default quota for accounts with no quota row yet (applies at first use; idempotent upsert, changeable)</p>
+<p><strong>Usage:</strong> <code>arkel payment set-default-quota [OPTIONS] --bytes &lt;BYTES&gt;</code></p>
+<h6 id="options-8"><strong>Options:</strong></h6>
+<ul>
+<li>
+<p><code>--bytes &lt;BYTES&gt;</code> — Default quota, e.g. "1GB" (same syntax as --capacity)</p>
+</li>
+<li>
+<p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs (comma-separated)</p>
+<p>Default value: <code>http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003</code></p>
+</li>
+</ul>
 <h2 id="arkel-repair"><code>arkel repair</code></h2>
 <p>Heal objects below target k/m (standalone, idempotent; run by cron)</p>
 <p><strong>Usage:</strong> <code>arkel repair [OPTIONS]</code></p>
-<h6 id="options-8"><strong>Options:</strong></h6>
+<h6 id="options-9"><strong>Options:</strong></h6>
 <ul>
 <li>
 <p><code>--index-addrs &lt;INDEX_ADDRS&gt;</code> — Index node HTTP URLs (comma-separated)</p>
