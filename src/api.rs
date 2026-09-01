@@ -198,8 +198,36 @@ async fn create_bucket(
 
 async fn register_node(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<RegisterNodePayload>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request("POST", "register", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    let payload: RegisterNodePayload = match serde_json::from_slice(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(IndexNodeResponse::err(&e.to_string())),
+            )
+                .into_response();
+        }
+    };
+    // A node may only register its own identity — binds node_id to its key so
+    // nobody can impersonate another node or inject a fake one.
+    if caller.as_bytes() != payload.node_id.as_slice() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(IndexNodeResponse::err(
+                "register must be signed by the node's own identity",
+            )),
+        )
+            .into_response();
+    }
     let cmd = IndexNodeRequest::RegisterNode {
         node_id: payload.node_id,
         capacity_bytes: payload.capacity_bytes,
@@ -216,8 +244,22 @@ async fn register_node(
     }
 }
 
-async fn list_buckets(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.state_machine.list_buckets().await {
+async fn list_buckets(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request("GET", "/", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    match state
+        .state_machine
+        .list_buckets_for(caller.as_bytes())
+        .await
+    {
         Ok(names) => Json(names).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -360,9 +402,30 @@ async fn set_repair_operator(
     }
 }
 
-async fn list_manifests(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.state_machine.list_all_manifests().await {
-        Ok(rows) => Json(rows).into_response(),
+async fn list_manifests(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request("GET", "manifests", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    // Repair-operator only: this is the full-object dump the repair scan runs on.
+    match state.state_machine.repair_operator().await {
+        Ok(Some(op)) if op == caller.as_bytes() => {
+            match state.state_machine.list_all_manifests().await {
+                Ok(rows) => Json(rows).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        Ok(_) => (
+            StatusCode::FORBIDDEN,
+            Json(IndexNodeResponse::err("forbidden")),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -379,14 +442,38 @@ pub struct RegisterNodePayload {
 async fn read_manifest(
     State(state): State<Arc<AppState>>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
-    match state.state_machine.read_manifest(&bucket, &key).await {
-        Ok(Some((manifest_bytes, signature))) => Json(serde_json::json!({
-            "manifest_bytes": manifest_bytes,
-            "signature": signature,
-        }))
-        .into_response(),
-        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))).into_response(),
+    let caller = match crate::index::auth::verify_request(
+        "GET",
+        &format!("manifest/{bucket}/{key}"),
+        &body,
+        &headers,
+    ) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    // Owner-gated: only the bucket owner may read its manifest metadata.
+    match state.state_machine.bucket_owner(&bucket).await {
+        Ok(Some(owner)) if owner == caller.as_bytes() => {
+            match state.state_machine.read_manifest(&bucket, &key).await {
+                Ok(Some((manifest_bytes, signature))) => Json(serde_json::json!({
+                    "manifest_bytes": manifest_bytes,
+                    "signature": signature,
+                }))
+                .into_response(),
+                Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        Ok(_) => (
+            StatusCode::FORBIDDEN,
+            Json(IndexNodeResponse::err("forbidden")),
+        )
+            .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -395,7 +482,30 @@ async fn list_objects(
     State(state): State<Arc<AppState>>,
     Path(bucket): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let caller = match crate::index::auth::verify_request("GET", &bucket, &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
+    // Owner-gated: only the bucket owner may list its objects.
+    match state.state_machine.bucket_owner(&bucket).await {
+        Ok(Some(owner)) if owner == caller.as_bytes() => {}
+        Ok(_) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(IndexNodeResponse::err("forbidden")),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+
     // Read the requested prefix / pagination params now so the API contract
     // is already in place for S3 ListObjects compatibility.
     let prefix = params.get("prefix").cloned().unwrap_or_default();
@@ -440,7 +550,15 @@ async fn list_objects(
 async fn account_quota(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    // Authenticated read: blocks anonymous enumeration of account balances.
+    // Any valid identity may query any account for beta (payment service +
+    // contribution smoke); owner/payment-operator-only is a future tightening.
+    if let Err(e) = crate::index::auth::verify_request("GET", "account/quota", &body, &headers) {
+        return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+    }
     let account = params.get("account").cloned().unwrap_or_default();
     match state.state_machine.account_quota(&account).await {
         Ok((total, used)) => Json(serde_json::json!({
@@ -603,12 +721,40 @@ async fn delete_object(
     }
 }
 
-/// Given a comma-separated hex list of shard blob hashes, return the subset
-/// referenced by no live manifest (refs == 0) — the storage GC candidates.
+/// Given a comma-separated hex list of shard blob hashes, return the subset a
+/// registered storage node may delete (Storj-style reconciliation, scoped to
+/// the caller's own placements + refs).
 async fn gc_candidates(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    body: Bytes,
 ) -> impl IntoResponse {
+    let caller =
+        match crate::index::auth::verify_request("GET", "shards/gc-candidates", &body, &headers) {
+            Ok(pk) => pk,
+            Err(e) => {
+                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
+                    .into_response();
+            }
+        };
+    match state
+        .state_machine
+        .is_registered_node(caller.as_bytes())
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(IndexNodeResponse::err("forbidden")),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
     let hex_list = params.get("hashes").cloned().unwrap_or_default();
     let hashes: Vec<[u8; 32]> = hex_list
         .split(',')
@@ -618,7 +764,11 @@ async fn gc_candidates(
             bytes.try_into().ok()
         })
         .collect();
-    match state.state_machine.gc_candidates(&hashes).await {
+    match state
+        .state_machine
+        .gc_candidates(caller.as_bytes(), &hashes)
+        .await
+    {
         Ok(candidates) => {
             Json(candidates.iter().map(hex::encode).collect::<Vec<String>>()).into_response()
         }

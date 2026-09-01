@@ -87,34 +87,9 @@ def wait_for_nodes(count: int = 3, timeout: float = 25.0) -> None:
 
 def wait_offline(addr: str, timeout: float = 150.0) -> bool:
     """Wait until `addr` shows Offline in /nodes/all.
-
-    Accelerates the health check by re-registering a live node each iteration,
-    which advances the Raft log (the offline detector is log-lag based).
     """
     import json as _json
-    import urllib.parse as up
     import urllib.request as _urllib
-
-    def live_node():
-        with _urllib.urlopen("http://127.0.0.1:8001/nodes/all", timeout=3) as r:
-            nodes = _json.load(r)
-        return next((n for n in nodes if n.get("addr") != addr), None)
-
-    def register(n):
-        payload = _json.dumps(
-            {
-                "node_id": n["node_id"],
-                "capacity_bytes": 1_000_000_000_000,
-                "addr": n["addr"],
-                "relay_url": n.get("relay_url"),
-            }
-        ).encode()
-        req = _urllib.request.Request(
-            "http://127.0.0.1:8001/register",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        _urllib.urlopen(req, timeout=3)
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -123,9 +98,6 @@ def wait_offline(addr: str, timeout: float = 150.0) -> bool:
                 nodes = _json.load(r)
             if any(n.get("addr") == addr and n.get("status") == "Offline" for n in nodes):
                 return True
-            node = live_node()
-            if node is not None:
-                register(node)  # advance the log so lag-based detection fires
         except Exception:
             pass
         time.sleep(2.0)

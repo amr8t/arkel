@@ -20,8 +20,13 @@ async fn run_account(identity: &NodeIdentity, cmd: AccountCmd) -> Result<()> {
         } => {
             let account = account.unwrap_or_else(|| hex::encode(identity.node_id().as_bytes()));
             let http = reqwest::Client::new();
-            let (total, used) =
-                arkel::index::client::account_quota(&http, &index_addrs, &account).await?;
+            let (total, used) = arkel::index::client::account_quota(
+                &http,
+                &index_addrs,
+                &account,
+                identity.secret_key(),
+            )
+            .await?;
             println!("{account}: {used} / {total} bytes used");
             Ok(())
         }
@@ -314,6 +319,7 @@ async fn main() -> Result<()> {
                 .or(cfg_storage.data_dir.clone().map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("./.arkel_storage_data"));
             let arkel = Arkel::init(base.clone()).await?;
+            let storage_key = arkel.identity.secret_key().clone();
 
             let blob_dir = base.join("blobs");
             let store: iroh_blobs::api::Store = {
@@ -326,6 +332,7 @@ async fn main() -> Result<()> {
                 let cell = store_cell.clone();
                 let idx_addrs = index_addrs.clone();
                 let http = reqwest::Client::new();
+                let storage_key = storage_key.clone();
                 // The GC callback runs on iroh-blobs' internal runtime, which has
                 // IO disabled — so all network/file IO must be spawned onto the
                 // main runtime and awaited here.
@@ -334,6 +341,7 @@ async fn main() -> Result<()> {
                     let cell = cell.clone();
                     let idx_addrs = idx_addrs.clone();
                     let http = http.clone();
+                    let storage_key = storage_key.clone();
                     let main_handle = main_handle.clone();
                     Box::pin(async move {
                         let store = match cell.get() {
@@ -362,9 +370,13 @@ async fn main() -> Result<()> {
                             .spawn({
                                 let http = http.clone();
                                 let idx_addrs = idx_addrs.clone();
+                                let storage_key = storage_key.clone();
                                 async move {
                                     arkel::index::client::gc_candidates(
-                                        &http, &idx_addrs, &hashes32,
+                                        &http,
+                                        &idx_addrs,
+                                        &hashes32,
+                                        &storage_key,
                                     )
                                     .await
                                 }

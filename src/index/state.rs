@@ -807,6 +807,33 @@ impl ArkelStateMachine {
         Ok(names)
     }
 
+    /// Names of the buckets owned by `owner` (privacy-gated listing).
+    pub async fn list_buckets_for(&self, owner: &[u8]) -> Result<Vec<String>, io::Error> {
+        let sm = self.inner.lock().await;
+        let mut stmt = sm
+            .conn
+            .prepare_cached("SELECT name FROM buckets WHERE owner = ?1 ORDER BY name")
+            .map_err(to_io_err)?;
+        let names = stmt
+            .query_map(params![owner], |r| r.get::<_, String>(0))
+            .map_err(to_io_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(to_io_err)?;
+        Ok(names)
+    }
+
+    /// Owner pubkey of a bucket, if it exists (read-side owner gate).
+    pub async fn bucket_owner(&self, bucket: &str) -> Result<Option<Vec<u8>>, io::Error> {
+        let sm = self.inner.lock().await;
+        role_holder(&sm.conn, Role::BucketOwner(bucket))
+    }
+
+    /// The registered repair-operator pubkey, if set (gates the /manifests dump).
+    pub async fn repair_operator(&self) -> Result<Option<Vec<u8>>, io::Error> {
+        let sm = self.inner.lock().await;
+        role_holder(&sm.conn, Role::RepairOperator)
+    }
+
     /// Read API: get a single object metadata record.
     pub async fn read_manifest(
         &self,
@@ -884,10 +911,42 @@ impl ArkelStateMachine {
             .collect())
     }
 
-    /// Which of the given shard blob hashes are referenced by no live
-    /// manifest (refs == 0)? Used by the storage-node GC loop.
-    pub async fn gc_candidates(&self, hashes: &[[u8; 32]]) -> Result<Vec<Vec<u8>>, io::Error> {
+    /// Is `node` a currently registered storage node?
+    pub async fn is_registered_node(&self, node: &[u8]) -> Result<bool, io::Error> {
         let sm = self.inner.lock().await;
+        Ok(sm.node_registry.contains_key(node))
+    }
+
+    /// Storj-style GC reconciliation: of the given hashes, return the deletable
+    /// subset for `caller`. A hash is KEPT only if it's still referenced AND
+    /// `caller` is one of its manifest placements; everything else (garbage,
+    /// or a redundant/rogue copy) is deletable. The answer depends only on the
+    /// caller's own placements + refs, so no other object's live-status leaks.
+    pub async fn gc_candidates(
+        &self,
+        caller: &[u8],
+        hashes: &[[u8; 32]],
+    ) -> Result<Vec<Vec<u8>>, io::Error> {
+        let sm = self.inner.lock().await;
+        // Hashes currently assigned to the caller, per manifests.
+        let mut assigned: std::collections::HashSet<[u8; 32]> = Default::default();
+        let mut stmt = sm
+            .conn
+            .prepare_cached("SELECT manifest FROM manifests")
+            .map_err(to_io_err)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, Vec<u8>>(0))
+            .map_err(to_io_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(to_io_err)?;
+        for mb in rows {
+            let m = crate::client::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
+            for p in &m.shards {
+                if p.node_id.as_bytes().as_slice() == caller {
+                    assigned.insert(p.blob_hash);
+                }
+            }
+        }
         let mut out = Vec::new();
         for h in hashes {
             let refs: i64 = sm
@@ -900,7 +959,8 @@ impl ArkelStateMachine {
                 .optional()
                 .map_err(to_io_err)?
                 .unwrap_or(0);
-            if refs == 0 {
+            let keep = refs > 0 && assigned.contains(h);
+            if !keep {
                 out.push(h.to_vec());
             }
         }

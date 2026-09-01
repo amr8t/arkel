@@ -74,11 +74,7 @@ pub fn parse_size(s: &str) -> anyhow::Result<u64> {
 
 /// Resolve a CLI `Option` against a config value, then a built-in default.
 /// CLI flag wins; then config file; then `default`.
-pub fn resolve<T: Clone>(
-    cli: Option<T>,
-    config: Option<T>,
-    default: T,
-) -> T {
+pub fn resolve<T: Clone>(cli: Option<T>, config: Option<T>, default: T) -> T {
     cli.or(config).unwrap_or(default)
 }
 

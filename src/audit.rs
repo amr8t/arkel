@@ -33,9 +33,9 @@ pub async fn run(
         // Teach the endpoint each node's addresses (no discovery configured).
         let mut connects = Vec::new();
         for (_, ns) in &stats {
-            let Ok(pk) = iroh::PublicKey::from_bytes(
-                ns.node_id.as_slice().try_into().unwrap_or(&[0u8; 32]),
-            ) else {
+            let Ok(pk) =
+                iroh::PublicKey::from_bytes(ns.node_id.as_slice().try_into().unwrap_or(&[0u8; 32]))
+            else {
                 continue;
             };
             let Ok(sa) = ns.addr.parse::<std::net::SocketAddr>() else {
@@ -50,11 +50,7 @@ pub async fn run(
             let ea = iroh::EndpointAddr::from_parts(pk, addrs);
             let ep = endpoint.clone();
             connects.push(async move {
-                tokio::time::timeout(
-                    Duration::from_secs(3),
-                    ep.connect(ea, iroh_blobs::ALPN),
-                )
-                .await
+                tokio::time::timeout(Duration::from_secs(3), ep.connect(ea, iroh_blobs::ALPN)).await
             });
         }
         let _ = futures_util::future::join_all(connects).await;
@@ -66,9 +62,9 @@ pub async fn run(
         };
         let mut fails: HashMap<Vec<u8>, u32> = HashMap::new();
         for (node_id, blob_hash) in samples {
-            let Ok(node) = iroh::PublicKey::from_bytes(
-                node_id.as_slice().try_into().unwrap_or(&[0u8; 32]),
-            ) else {
+            let Ok(node) =
+                iroh::PublicKey::from_bytes(node_id.as_slice().try_into().unwrap_or(&[0u8; 32]))
+            else {
                 continue;
             };
             let hash = iroh_blobs::Hash::from(blob_hash);

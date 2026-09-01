@@ -157,6 +157,39 @@ pub async fn index_read(
     Ok(body)
 }
 
+/// Signed GET for privacy-gated metadata reads (manifest, listings). The
+/// signature covers the empty body, matching the server's `verify_request`.
+pub async fn index_read_signed(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    route: &str,
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    index_read_signed_url(http, index_addrs, route, route, secret_key).await
+}
+
+/// Signed GET where the signing path differs from the URL — query strings are
+/// NOT part of the signature, so routes carrying `?query=` sign the bare path.
+async fn index_read_signed_url(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    sign_path: &str,
+    url: &str,
+    secret_key: &iroh::SecretKey,
+) -> Result<serde_json::Value> {
+    let leader = find_leader(http, index_addrs).await?;
+    let (auth, time) = auth_headers(secret_key, &reqwest::Method::GET, sign_path, &[]);
+    let body: serde_json::Value = http
+        .get(format!("{leader}/{url}"))
+        .header("authorization", auth)
+        .header("x-arkel-time", time)
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(body)
+}
+
 pub async fn index_delete(
     http: &reqwest::Client,
     index_addrs: &[String],
@@ -204,19 +237,22 @@ pub async fn list_healthy_nodes(
         .collect()
 }
 
-/// Ask the index which of the given shard blob hashes are referenced by no
-/// live manifest (refs == 0) — the storage GC candidates. Returns the
-/// unreferenced subset as hex strings.
+/// Ask the index which of the given shard blob hashes `node` may delete —
+/// Storj-style reconciliation scoped to the node's own placements + refs.
+/// Signed by the storage node's identity.
 pub async fn gc_candidates(
     http: &reqwest::Client,
     index_addrs: &[String],
     hashes: &[[u8; 32]],
+    secret_key: &iroh::SecretKey,
 ) -> Result<Vec<Vec<u8>>> {
     let query: Vec<String> = hashes.iter().map(hex::encode).collect();
-    let body = index_read(
+    let body = index_read_signed_url(
         http,
         index_addrs,
+        "shards/gc-candidates",
         &format!("shards/gc-candidates?hashes={}", query.join(",")),
+        secret_key,
     )
     .await?;
     let arr = body
@@ -229,11 +265,14 @@ pub async fn gc_candidates(
 }
 
 /// All (bucket, key, manifest_bytes) — the repair scan source.
+/// All (bucket, key, manifest_bytes) — the repair scan source. Repair-operator
+/// only; signed by the repair identity.
 pub async fn list_all_manifests(
     http: &reqwest::Client,
     index_addrs: &[String],
+    secret_key: &iroh::SecretKey,
 ) -> Result<Vec<(String, String, Vec<u8>)>> {
-    let body = index_read(http, index_addrs, "manifests").await?;
+    let body = index_read_signed(http, index_addrs, "manifests", secret_key).await?;
     let arr = body
         .as_array()
         .context("GET /manifests expected an array")?;
@@ -314,11 +353,14 @@ pub async fn account_quota(
     http: &reqwest::Client,
     index_addrs: &[String],
     account: &str,
+    secret_key: &iroh::SecretKey,
 ) -> Result<(u64, u64)> {
-    let body = index_read(
+    let body = index_read_signed_url(
         http,
         index_addrs,
+        "account/quota",
         &format!("account/quota?account={account}"),
+        secret_key,
     )
     .await?;
     Ok((

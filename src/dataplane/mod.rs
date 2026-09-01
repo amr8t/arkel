@@ -23,7 +23,7 @@ use crate::client::manifest::{
     Manifest, ShardPlacement, bytes_to_hash, deserialize_manifest, etag_from_hash,
     serialize_manifest,
 };
-use crate::index::client::{index_delete, index_put, index_read, list_healthy_nodes};
+use crate::index::client::{index_delete, index_put, index_read_signed, list_healthy_nodes};
 use crate::storage::blob::get_blob;
 
 pub struct PreparedUpload {
@@ -281,10 +281,11 @@ pub async fn get(
         }
     }
 
-    let body = index_read(
+    let body = index_read_signed(
         &cfg.http,
         &cfg.index_addrs,
         &format!("manifest/{bucket}/{key}"),
+        &cfg.secret_key,
     )
     .await?;
     let manifest_bytes: Vec<u8> = serde_json::from_value(body["manifest_bytes"].clone())?;

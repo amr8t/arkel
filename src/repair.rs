@@ -48,7 +48,7 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
         }
     }
 
-    let manifests = client::list_all_manifests(http, index_addrs).await?;
+    let manifests = client::list_all_manifests(http, index_addrs, &cfg.secret_key).await?;
     let mut fixed = 0usize;
 
     for (bucket, key, mb) in manifests {
