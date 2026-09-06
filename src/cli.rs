@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use crate::config::parse_size;
-use crate::dataplane::StorageTarget;
+use crate::client::StorageTarget;
 
 pub const DEFAULT_INDEX_ADDRS: &str =
     "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003";
@@ -213,8 +213,8 @@ pub fn parse_targets(addrs: &[String]) -> anyhow::Result<Vec<StorageTarget>> {
         .collect()
 }
 
-pub fn erasure_config(k: u8, m: u8) -> crate::dataplane::ErasureConfig {
-    crate::dataplane::ErasureConfig {
+pub fn erasure_config(k: u8, m: u8) -> crate::client::ErasureConfig {
+    crate::client::ErasureConfig {
         k: k as usize,
         m: m as usize,
     }

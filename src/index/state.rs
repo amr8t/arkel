@@ -292,7 +292,7 @@ impl StateMachineInner {
                         return Ok(IndexNodeResponse::err("forbidden"));
                     }
                 }
-                let new_manifest = crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                let new_manifest = crate::manifest::deserialize_manifest(&manifest_bytes)
                     .map_err(to_io_err)?;
                 // Quota: account = caller (enforced == owner). 507 over limit.
                 if !Self::try_debit(
@@ -315,7 +315,7 @@ impl StateMachineInner {
                     .optional()
                     .map_err(to_io_err)?
                 {
-                    let old = crate::client::manifest::deserialize_manifest(&existing)
+                    let old = crate::manifest::deserialize_manifest(&existing)
                         .map_err(to_io_err)?;
                     Self::release(tx, &hex::encode(&caller), old.ciphertext_size as i64)?;
                     for s in &old.shards {
@@ -400,7 +400,7 @@ impl StateMachineInner {
                 if !caller_has_role(tx, Role::BucketOwner(&bucket), &caller)? {
                     return Ok(IndexNodeResponse::err("forbidden"));
                 }
-                let old_manifest: Option<crate::client::manifest::Manifest> = tx
+                let old_manifest: Option<crate::manifest::Manifest> = tx
                     .query_row(
                         "SELECT manifest FROM manifests WHERE bucket=?1 AND key=?2",
                         params![bucket, key],
@@ -408,7 +408,7 @@ impl StateMachineInner {
                     )
                     .optional()
                     .map_err(to_io_err)?
-                    .map(|mb| crate::client::manifest::deserialize_manifest(&mb))
+                    .map(|mb| crate::manifest::deserialize_manifest(&mb))
                     .transpose()
                     .map_err(to_io_err)?;
                 // Release quota for the object's stored bytes (account = caller).
@@ -482,8 +482,8 @@ impl StateMachineInner {
                     )
                     .map_err(to_io_err)?;
                 let old_manifest =
-                    crate::client::manifest::deserialize_manifest(&old).map_err(to_io_err)?;
-                let new_manifest = crate::client::manifest::deserialize_manifest(&manifest_bytes)
+                    crate::manifest::deserialize_manifest(&old).map_err(to_io_err)?;
+                let new_manifest = crate::manifest::deserialize_manifest(&manifest_bytes)
                     .map_err(to_io_err)?;
                 // Quota: account = the bucket OWNER (caller is the repair operator).
                 // Adjust usage by the ciphertext-size delta.
@@ -940,7 +940,7 @@ impl ArkelStateMachine {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(to_io_err)?;
         for mb in rows {
-            let m = crate::client::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
+            let m = crate::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
             for p in &m.shards {
                 if p.node_id.as_bytes().as_slice() == caller {
                     assigned.insert(p.blob_hash);
@@ -1043,7 +1043,7 @@ impl ArkelStateMachine {
             .map_err(to_io_err)?;
         let mut usage: HashMap<Vec<u8>, u64> = HashMap::new();
         for mb in rows {
-            let m = crate::client::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
+            let m = crate::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
             let shard_size = m.ciphertext_size.div_ceil(m.k as u64);
             for p in &m.shards {
                 *usage.entry(p.node_id.as_bytes().to_vec()).or_default() += shard_size;
@@ -1069,7 +1069,7 @@ impl ArkelStateMachine {
             .map_err(to_io_err)?;
         let mut placements: Vec<(Vec<u8>, [u8; 32])> = Vec::new();
         for mb in rows {
-            let m = crate::client::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
+            let m = crate::manifest::deserialize_manifest(&mb).map_err(to_io_err)?;
             for p in &m.shards {
                 placements.push((p.node_id.as_bytes().to_vec(), p.blob_hash));
             }

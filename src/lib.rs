@@ -8,15 +8,13 @@ use std::time::Duration;
 
 use crate::storage::{DiskStore, NodeRegistrar, ShardStore};
 
-pub mod api;
-pub mod audit;
 pub mod cli;
 pub mod client;
 pub mod config;
-pub mod dataplane;
 pub mod identity;
 pub mod index;
-pub mod repair;
+pub mod manifest;
+pub mod ops;
 pub mod storage;
 
 /// Index-node cluster seed addresses.
@@ -275,7 +273,7 @@ async fn run_index_node(
         .context("Failed to spin up core Raft engine")
         .expect("Raft engine startup failed");
 
-    let batch_collector = std::sync::Arc::new(crate::api::BatchCollector::new(
+    let batch_collector = std::sync::Arc::new(crate::index::api::BatchCollector::new(
         std::env::var("ARKEL_BATCH_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -291,7 +289,7 @@ async fn run_index_node(
         tokio::spawn(async move { collector_for_flush.flush_loop(raft_for_flush).await });
     }
 
-    let state = std::sync::Arc::new(crate::api::AppState {
+    let state = std::sync::Arc::new(crate::index::api::AppState {
         raft: raft.clone(),
         state_machine: state_machine_for_api.clone(),
         batch_collector: batch_collector.clone(),
@@ -300,10 +298,10 @@ async fn run_index_node(
     let listener = tokio::net::TcpListener::bind(index_node.params.http_addr)
         .await
         .expect("Failed to bind HTTP API listener");
-    let app = crate::api::router()
+    let app = crate::index::api::router()
         .merge(index::raft::raft_router(state.clone()))
         .with_state(state);
-    tokio::spawn(crate::api::serve_index(listener, app));
+    tokio::spawn(crate::index::api::serve_index(listener, app));
 
     let raft_health = raft.clone();
     let sm_health = state_machine_for_api.clone();
@@ -414,7 +412,7 @@ async fn run_index_node(
     let sm_audit = state_machine_for_api.clone();
     let ep_audit = endpoint.clone();
     tokio::spawn(
-        async move { crate::audit::run(raft_audit, sm_audit, ep_audit, audit_store).await },
+        async move { crate::index::audit::run(raft_audit, sm_audit, ep_audit, audit_store).await },
     );
 
     // Keep the Iroh endpoint alive for future gateway<->storage use.

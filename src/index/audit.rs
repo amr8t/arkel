@@ -5,14 +5,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::index::{ArkelStateMachine, IndexNodeRequest};
+use super::{ArkelStateMachine, IndexNodeRequest};
 use crate::storage::blob::get_blob;
 
 const SAMPLE: usize = 32;
 const FAIL_THRESHOLD: u32 = 2;
 
 pub async fn run(
-    raft: openraft::Raft<crate::index::ArkelRaftConfig, ArkelStateMachine>,
+    raft: openraft::Raft<super::ArkelRaftConfig, ArkelStateMachine>,
     sm: ArkelStateMachine,
     endpoint: iroh::Endpoint,
     store: iroh_blobs::api::Store,

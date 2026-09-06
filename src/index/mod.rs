@@ -1,6 +1,8 @@
+pub mod api;
+pub mod audit;
 pub mod auth;
-pub mod client;
 pub mod raft;
+pub mod remote;
 pub mod state;
 pub mod types;
 

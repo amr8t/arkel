@@ -13,8 +13,10 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::client::Client as ArkelClient;
-use crate::dataplane::{ErasureConfig, reencode};
-use crate::index::client;
+use crate::client::pool::reencode;
+use crate::client::ErasureConfig;
+use crate::index::remote;
+use crate::manifest::deserialize_manifest;
 use crate::storage::blob::get_blob;
 
 /// Run one repair pass.
@@ -27,13 +29,13 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
     let index_addrs = &cfg.index_addrs;
 
     if register {
-        client::set_repair_operator(http, index_addrs, &cfg.secret_key).await?;
+        remote::set_repair_operator(http, index_addrs, &cfg.secret_key).await?;
         tracing::info!("registered repair operator");
         return Ok(());
     }
 
     // Health map + teach the endpoint the node addresses so downloads work.
-    let nodes = client::list_all_nodes(http, index_addrs).await?;
+    let nodes = remote::list_all_nodes(http, index_addrs).await?;
     let mut offline: HashSet<PublicKey> = HashSet::new();
     for n in &nodes {
         if n.offline {
@@ -48,14 +50,14 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
         }
     }
 
-    let manifests = client::list_all_manifests(http, index_addrs, &cfg.secret_key).await?;
+    let manifests = remote::list_all_manifests(http, index_addrs, &cfg.secret_key).await?;
     let mut fixed = 0usize;
 
     for (bucket, key, mb) in manifests {
         if fixed >= rate_limit {
             break;
         }
-        let manifest = crate::client::manifest::deserialize_manifest(&mb)?;
+        let manifest = deserialize_manifest(&mb)?;
         let total = manifest.k as usize + manifest.m as usize;
         let from = ErasureConfig {
             k: manifest.k as usize,
@@ -86,7 +88,7 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
 
         // Effective target: assign_shards' degraded config, so the manifest k/m
         // always matches the actual shard count.
-        let (effective, _) = crate::dataplane::assign_shards(cfg).await?;
+        let (effective, _) = crate::client::pool::assign_shards(cfg).await?;
 
         if avail < manifest.k as usize {
             tracing::warn!(

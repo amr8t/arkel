@@ -22,7 +22,8 @@ use std::future::Future;
 use std::io::Cursor;
 use std::sync::Arc;
 
-use crate::{ArkelIndexNode, api::AppState};
+use crate::ArkelIndexNode;
+use super::api::AppState;
 
 pub struct ArkelRaftNetworkFactory {
     client: reqwest::Client,

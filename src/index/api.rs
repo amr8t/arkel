@@ -1,4 +1,4 @@
-use crate::index::{ArkelRaftConfig, ArkelStateMachine, IndexNodeRequest, IndexNodeResponse};
+use super::{ArkelRaftConfig, ArkelStateMachine, IndexNodeRequest, IndexNodeResponse};
 use axum::body::Bytes;
 use axum::http::HeaderMap;
 use axum::{
@@ -172,7 +172,7 @@ async fn create_bucket(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("PUT", "/", &body, &headers) {
+    let caller = match super::auth::verify_request("PUT", "/", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -201,7 +201,7 @@ async fn register_node(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("POST", "register", &body, &headers) {
+    let caller = match super::auth::verify_request("POST", "register", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -249,7 +249,7 @@ async fn list_buckets(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("GET", "/", &body, &headers) {
+    let caller = match super::auth::verify_request("GET", "/", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -297,7 +297,7 @@ async fn commit_manifest(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request(
+    let caller = match super::auth::verify_request(
         "PUT",
         &format!("manifest/{bucket}/{key}"),
         &body,
@@ -340,7 +340,7 @@ async fn repair_manifest(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request(
+    let caller = match super::auth::verify_request(
         "POST",
         &format!("manifest/{bucket}/{key}/repair"),
         &body,
@@ -383,7 +383,7 @@ async fn set_repair_operator(
     body: Bytes,
 ) -> impl IntoResponse {
     let caller =
-        match crate::index::auth::verify_request("POST", "repair-operator", &body, &headers) {
+        match super::auth::verify_request("POST", "repair-operator", &body, &headers) {
             Ok(pk) => pk,
             Err(e) => {
                 return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
@@ -407,7 +407,7 @@ async fn list_manifests(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("GET", "manifests", &body, &headers) {
+    let caller = match super::auth::verify_request("GET", "manifests", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -445,7 +445,7 @@ async fn read_manifest(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request(
+    let caller = match super::auth::verify_request(
         "GET",
         &format!("manifest/{bucket}/{key}"),
         &body,
@@ -485,7 +485,7 @@ async fn list_objects(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("GET", &bucket, &body, &headers) {
+    let caller = match super::auth::verify_request("GET", &bucket, &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -556,7 +556,7 @@ async fn account_quota(
     // Authenticated read: blocks anonymous enumeration of account balances.
     // Any valid identity may query any account for beta (payment service +
     // contribution smoke); owner/payment-operator-only is a future tightening.
-    if let Err(e) = crate::index::auth::verify_request("GET", "account/quota", &body, &headers) {
+    if let Err(e) = super::auth::verify_request("GET", "account/quota", &body, &headers) {
         return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
     }
     let account = params.get("account").cloned().unwrap_or_default();
@@ -581,7 +581,7 @@ async fn set_default_quota(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("POST", "quota/default", &body, &headers)
+    let caller = match super::auth::verify_request("POST", "quota/default", &body, &headers)
     {
         Ok(pk) => pk,
         Err(e) => {
@@ -617,7 +617,7 @@ async fn set_payment_operator(
     body: Bytes,
 ) -> impl IntoResponse {
     let caller =
-        match crate::index::auth::verify_request("POST", "payment-operator", &body, &headers) {
+        match super::auth::verify_request("POST", "payment-operator", &body, &headers) {
             Ok(pk) => pk,
             Err(e) => {
                 return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
@@ -657,7 +657,7 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     };
     let nodes: Vec<RegisterNode> = stats
         .into_iter()
-        .filter(|(_, ns)| ns.status == crate::index::types::NodeStatus::Online)
+        .filter(|(_, ns)| ns.status == super::types::NodeStatus::Online)
         .map(|(node_id, ns)| RegisterNode {
             node_id: hex::encode(&node_id),
             addr: ns.addr,
@@ -696,7 +696,7 @@ async fn delete_object(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request(
+    let caller = match super::auth::verify_request(
         "DELETE",
         &format!("{bucket}/{key}"),
         &body,
@@ -731,7 +731,7 @@ async fn gc_candidates(
     body: Bytes,
 ) -> impl IntoResponse {
     let caller =
-        match crate::index::auth::verify_request("GET", "shards/gc-candidates", &body, &headers) {
+        match super::auth::verify_request("GET", "shards/gc-candidates", &body, &headers) {
             Ok(pk) => pk,
             Err(e) => {
                 return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
@@ -789,7 +789,7 @@ async fn credit_quota(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match crate::index::auth::verify_request("POST", "account/quota", &body, &headers)
+    let caller = match super::auth::verify_request("POST", "account/quota", &body, &headers)
     {
         Ok(pk) => pk,
         Err(e) => {

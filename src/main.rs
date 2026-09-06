@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use arkel::{
     Arkel, BootstrapConfig, NodeMode,
-    cli::{AccountCmd, Cli, ClientCmd, Commands, PaymentCmd, erasure_config, parse_targets},
-    client::{Client as ArkelClient, ClientConfig},
-    dataplane::ErasureConfig,
+    cli::{Cli, ClientCmd, Commands, erasure_config, parse_targets},
+    client::{Client as ArkelClient, ClientConfig, ErasureConfig},
     identity::NodeIdentity,
 };
 use clap::Parser;
@@ -11,71 +10,6 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-async fn run_account(identity: &NodeIdentity, cmd: AccountCmd) -> Result<()> {
-    match cmd {
-        AccountCmd::Quota {
-            account,
-            index_addrs,
-        } => {
-            let account = account.unwrap_or_else(|| hex::encode(identity.node_id().as_bytes()));
-            let http = reqwest::Client::new();
-            let (total, used) = arkel::index::client::account_quota(
-                &http,
-                &index_addrs,
-                &account,
-                identity.secret_key(),
-            )
-            .await?;
-            println!("{account}: {used} / {total} bytes used");
-            Ok(())
-        }
-    }
-}
-
-/// Payment-operator tooling: register this identity as the payment operator,
-/// or credit quota to an account (the payment service in CLI form).
-async fn run_payment(identity: &NodeIdentity, cmd: PaymentCmd) -> Result<()> {
-    let http = reqwest::Client::new();
-    match cmd {
-        PaymentCmd::Register { index_addrs } => {
-            arkel::index::client::set_payment_operator(&http, &index_addrs, identity.secret_key())
-                .await?;
-            println!("registered payment operator: {}", identity.node_id());
-        }
-        PaymentCmd::Credit {
-            account,
-            bytes,
-            source,
-            ref_id,
-            index_addrs,
-        } => {
-            arkel::index::client::credit_quota(
-                &http,
-                &index_addrs,
-                &account,
-                bytes,
-                &source,
-                &ref_id,
-                identity.secret_key(),
-            )
-            .await?;
-            println!("credited {bytes} bytes to {account} (ref {ref_id})");
-        }
-        PaymentCmd::SetDefaultQuota { bytes, index_addrs } => {
-            let total = arkel::config::parse_size(&bytes)?;
-            arkel::index::client::set_default_quota(
-                &http,
-                &index_addrs,
-                total,
-                identity.secret_key(),
-            )
-            .await?;
-            println!("set default quota to {bytes} ({total} bytes)");
-        }
-    }
-    Ok(())
-}
 
 async fn run_client(base_dir: PathBuf, identity: &NodeIdentity, cmd: ClientCmd) -> Result<()> {
     let store_dir = base_dir.join("blobs");
@@ -180,7 +114,7 @@ async fn run_repair(
         http: reqwest::Client::new(),
     };
     let client = ArkelClient::new(cfg, store_dir).await?;
-    let result = arkel::repair::run(&client, register, rate_limit).await;
+    let result = arkel::ops::repair::run(&client, register, rate_limit).await;
     client.endpoint.close().await;
     result
 }
@@ -211,14 +145,14 @@ async fn main() -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("./.arkel_account_data"));
             let arkel = Arkel::init(base).await?;
-            return run_account(&arkel.identity, cmd).await;
+            return arkel::ops::account::run(&arkel.identity, cmd).await;
         }
         Commands::Payment { cmd } => {
             let base = cli_data_dir
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("./.arkel_payment_data"));
             let arkel = Arkel::init(base).await?;
-            return run_payment(&arkel.identity, cmd).await;
+            return arkel::ops::payment::run(&arkel.identity, cmd).await;
         }
         Commands::Repair {
             index_addrs,
@@ -372,7 +306,7 @@ async fn main() -> Result<()> {
                                 let idx_addrs = idx_addrs.clone();
                                 let storage_key = storage_key.clone();
                                 async move {
-                                    arkel::index::client::gc_candidates(
+                                    arkel::index::remote::gc_candidates(
                                         &http,
                                         &idx_addrs,
                                         &hashes32,

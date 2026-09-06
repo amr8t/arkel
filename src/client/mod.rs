@@ -1,19 +1,18 @@
 pub mod encrypt;
-pub mod manifest;
+pub mod erasure;
+pub mod pool;
 
 use anyhow::Result;
 use std::path::PathBuf;
 
-use crate::dataplane::{self, DataPlaneConfig, ErasureConfig, StorageTarget};
-
-/// Client-facing alias for the shared data-plane config.
-pub use crate::dataplane::DataPlaneConfig as ClientConfig;
+pub use erasure::ErasureConfig;
+pub use pool::{ClientConfig, StorageTarget};
 
 /// The arkel client library: bundles the shared data-plane config with an
 /// iroh runtime (ephemeral endpoint + blob store). This is the embeddable,
 /// programmatic interface (CLI and future gateway/adapters build on it).
 pub struct Client {
-    pub cfg: DataPlaneConfig,
+    pub cfg: ClientConfig,
     pub endpoint: iroh::Endpoint,
     pub store: iroh_blobs::api::Store,
     pub router: iroh::protocol::Router,
@@ -23,7 +22,7 @@ impl Client {
     /// Build the iroh runtime: endpoint + blob store + blobs router (so
     /// storage nodes can pull shards from us, pull-based put). Reused by the
     /// M6 gateway, which runs the same runtime for its proxy path.
-    pub async fn new(cfg: DataPlaneConfig, store_dir: PathBuf) -> Result<Self> {
+    pub async fn new(cfg: ClientConfig, store_dir: PathBuf) -> Result<Self> {
         let secret_key = cfg.secret_key.clone();
         let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
             .relay_mode(iroh::endpoint::RelayMode::Default)
@@ -53,7 +52,7 @@ impl Client {
         data: &[u8],
         targets: &[StorageTarget],
     ) -> Result<String> {
-        dataplane::put(
+        pool::put(
             &self.cfg,
             targets,
             &self.endpoint,
@@ -71,11 +70,11 @@ impl Client {
         key: &str,
         targets: &[StorageTarget],
     ) -> Result<Vec<u8>> {
-        dataplane::get(&self.cfg, targets, &self.endpoint, &self.store, bucket, key).await
+        pool::get(&self.cfg, targets, &self.endpoint, &self.store, bucket, key).await
     }
 
     pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
-        dataplane::delete(&self.cfg, bucket, key).await
+        pool::delete(&self.cfg, bucket, key).await
     }
 
     pub async fn repair_object(
@@ -88,7 +87,7 @@ impl Client {
         shards: Vec<Vec<u8>>,
         target: ErasureConfig,
     ) -> Result<String> {
-        dataplane::repair_object(
+        pool::repair_object(
             &self.cfg,
             &self.endpoint,
             &self.store,

@@ -1,5 +1,5 @@
 use crate::identity::NodeIdentity;
-use crate::index::client::index_write;
+use crate::index::remote::index_write;
 use anyhow::Result;
 use iroh::PublicKey;
 use std::net::SocketAddr;

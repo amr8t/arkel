@@ -14,16 +14,14 @@ use iroh::{PublicKey, SecretKey};
 use rand::seq::SliceRandom;
 use std::net::SocketAddr;
 use std::time::Duration;
-pub mod erasure;
-
-pub use erasure::{ErasureConfig, decode, encode};
 
 use crate::client::encrypt::{decrypt_shard, derive_key, encrypt_shard};
-use crate::client::manifest::{
+use crate::client::erasure::{ErasureConfig, decode, encode};
+use crate::index::remote::{index_delete, index_put, index_read_signed, list_healthy_nodes};
+use crate::manifest::{
     Manifest, ShardPlacement, bytes_to_hash, deserialize_manifest, etag_from_hash,
     serialize_manifest,
 };
-use crate::index::client::{index_delete, index_put, index_read_signed, list_healthy_nodes};
 use crate::storage::blob::get_blob;
 
 pub struct PreparedUpload {
@@ -90,7 +88,7 @@ pub struct StorageTarget {
 ///
 /// Both the smart client (CLI) and the future M6 S3-proxy gateway build their
 /// own instance and pass it with their own endpoint/store runtime.
-pub struct DataPlaneConfig {
+pub struct ClientConfig {
     pub index_addrs: Vec<String>,
     pub secret_key: SecretKey,
     pub ec_config: ErasureConfig,
@@ -101,7 +99,7 @@ pub struct DataPlaneConfig {
 /// nodes pull them (iroh-blobs push is unreliable), build + sign a Manifest, and
 /// commit it via Raft. Returns the ETag.
 pub async fn put(
-    cfg: &DataPlaneConfig,
+    cfg: &ClientConfig,
     targets: &[StorageTarget],
     endpoint: &iroh::Endpoint,
     store: &iroh_blobs::api::Store,
@@ -175,7 +173,7 @@ pub async fn put(
     Ok(etag_from_hash(prepared.object_hash.as_bytes()))
 }
 
-pub async fn delete(cfg: &DataPlaneConfig, bucket: &str, key: &str) -> Result<()> {
+pub async fn delete(cfg: &ClientConfig, bucket: &str, key: &str) -> Result<()> {
     index_delete(
         &cfg.http,
         &cfg.index_addrs,
@@ -234,7 +232,7 @@ async fn fetch_shard(
 /// by `node_id`, so `targets` is used to teach the endpoint the peer addresses
 /// first (no discovery is configured).
 pub async fn get(
-    cfg: &DataPlaneConfig,
+    cfg: &ClientConfig,
     targets: &[StorageTarget],
     endpoint: &iroh::Endpoint,
     store: &iroh_blobs::api::Store,
@@ -364,7 +362,7 @@ pub async fn get(
     )
 }
 
-pub async fn assign_shards(cfg: &DataPlaneConfig) -> Result<(ErasureConfig, Vec<StorageTarget>)> {
+pub async fn assign_shards(cfg: &ClientConfig) -> Result<(ErasureConfig, Vec<StorageTarget>)> {
     let pool = list_healthy_nodes(&cfg.http, &cfg.index_addrs).await?;
     if pool.is_empty() {
         bail!("no healthy storage nodes");
@@ -410,7 +408,7 @@ pub fn reencode(
 }
 
 pub async fn repair_object(
-    cfg: &DataPlaneConfig,
+    cfg: &ClientConfig,
     endpoint: &iroh::Endpoint,
     store: &iroh_blobs::api::Store,
     bucket: &str,
@@ -457,7 +455,7 @@ pub async fn repair_object(
         shards: placements,
     };
     let manifest_bytes = serialize_manifest(&manifest)?;
-    crate::index::client::repair_commit(
+    crate::index::remote::repair_commit(
         &cfg.http,
         &cfg.index_addrs,
         &format!("manifest/{bucket}/{key}/repair"),

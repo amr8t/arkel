@@ -48,7 +48,11 @@ def storage_addrs(count: int = 3, timeout: float = 20.0) -> str:
         for i, port in enumerate(STORAGE_PORTS, start=1):
             if len(parts) >= count:
                 break
-            log = (REPO_ROOT / "logs" / f"storage{i}.log").read_text(errors="replace")
+            log_path = REPO_ROOT / "logs" / f"storage{i}.log"
+            try:
+                log = log_path.read_text(errors="replace")
+            except FileNotFoundError:
+                continue  # node not started yet; keep polling
             for line in log.splitlines():
                 if "endpointId:" in line:
                     pubkey = line.split("endpointId:", 1)[1].split(".")[0].strip()
