@@ -7,6 +7,3 @@
 logs/
 milestones/
 __pycache__/
-
-# Zola build output
-website/public/
