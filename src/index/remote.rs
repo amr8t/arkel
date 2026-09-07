@@ -140,21 +140,54 @@ pub async fn index_put(
     .await
 }
 
+/// Issue a read GET to the index cluster, transparently surviving leader changes.
+///
+/// Mirrors `index_send` for writes: on a `503 Service Unavailable` (a node that
+/// lost its leader lease or stepped down between discovery and request) or a
+/// transport error, re-discovers the leader and retries (up to 3 attempts).
+/// Other non-2xx statuses (401/403/404) are authoritative and returned as-is.
+///
+/// When `signed` is `Some((secret_key, sign_path))`, the request carries the
+/// Arkel auth headers signing `sign_path` (which may differ from `url` when the
+/// URL carries a query string).
+async fn index_get(
+    http: &reqwest::Client,
+    index_addrs: &[String],
+    url: &str,
+    signed: Option<(&iroh::SecretKey, &str)>,
+) -> Result<reqwest::Response> {
+    for _ in 0..3 {
+        let leader = find_leader(http, index_addrs).await?;
+        let mut req = http.get(format!("{leader}/{url}"));
+        if let Some((secret_key, sign_path)) = signed {
+            let (auth, time) = auth_headers(secret_key, &reqwest::Method::GET, sign_path, &[]);
+            req = req.header("authorization", auth).header("x-arkel-time", time);
+        }
+        match req.send().await {
+            Ok(resp) if resp.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+                return Ok(resp);
+            }
+            Ok(resp) => {
+                tracing::warn!(
+                    "index read rejected by {leader} ({}); re-discovering leader",
+                    resp.status()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("index read error from {leader}: {e}; re-discovering leader");
+            }
+        }
+    }
+    bail!("index read failed after retries")
+}
+
 pub async fn index_read(
     http: &reqwest::Client,
     index_addrs: &[String],
     route: &str,
 ) -> Result<serde_json::Value> {
-    let leader = find_leader(http, index_addrs).await?;
-
-    let body: serde_json::Value = http
-        .get(format!("{leader}/{route}"))
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    Ok(body)
+    let resp = index_get(http, index_addrs, route, None).await?;
+    Ok(resp.json().await?)
 }
 
 /// Signed GET for privacy-gated metadata reads (manifest, listings). The
@@ -177,17 +210,8 @@ async fn index_read_signed_url(
     url: &str,
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
-    let leader = find_leader(http, index_addrs).await?;
-    let (auth, time) = auth_headers(secret_key, &reqwest::Method::GET, sign_path, &[]);
-    let body: serde_json::Value = http
-        .get(format!("{leader}/{url}"))
-        .header("authorization", auth)
-        .header("x-arkel-time", time)
-        .send()
-        .await?
-        .json()
-        .await?;
-    Ok(body)
+    let resp = index_get(http, index_addrs, url, Some((secret_key, sign_path))).await?;
+    Ok(resp.json().await?)
 }
 
 pub async fn index_delete(

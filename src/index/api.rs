@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{delete, get, post, put},
 };
-use openraft::raft::ClientWriteResponse;
+use openraft::raft::{ClientWriteResponse, ReadPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -130,6 +130,22 @@ pub struct AppState {
     pub raft: openraft::Raft<ArkelRaftConfig, ArkelStateMachine>,
     pub state_machine: ArkelStateMachine,
     pub batch_collector: Arc<BatchCollector>,
+}
+
+/// Leader lease read barrier: ensures this node is still a quorum-backed leader
+/// before a handler reads the replicated state machine. Without it a leader cut
+/// off from its peers keeps serving stale metadata (classic Raft stale-read).
+/// Returns `SERVICE_UNAVAILABLE` so clients re-discover the real leader.
+async fn linearizable_read(state: &AppState) -> Result<(), StatusCode> {
+    state
+        .raft
+        .ensure_linearizable(ReadPolicy::LeaseRead)
+        .await
+        .map(|_| ())
+        .map_err(|e| {
+            tracing::warn!("linearizable read barrier failed: {e:?}");
+            StatusCode::SERVICE_UNAVAILABLE
+        })
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -255,6 +271,13 @@ async fn list_buckets(
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
         }
     };
+    if let Err(status) = linearizable_read(&state).await {
+        return (
+            status,
+            Json(IndexNodeResponse::err("index not ready (no leader lease)")),
+        )
+            .into_response();
+    }
     match state
         .state_machine
         .list_buckets_for(caller.as_bytes())
@@ -456,6 +479,13 @@ async fn read_manifest(
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
         }
     };
+    if let Err(status) = linearizable_read(&state).await {
+        return (
+            status,
+            Json(IndexNodeResponse::err("index not ready (no leader lease)")),
+        )
+            .into_response();
+    }
     // Owner-gated: only the bucket owner may read its manifest metadata.
     match state.state_machine.bucket_owner(&bucket).await {
         Ok(Some(owner)) if owner == caller.as_bytes() => {
@@ -491,6 +521,13 @@ async fn list_objects(
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
         }
     };
+    if let Err(status) = linearizable_read(&state).await {
+        return (
+            status,
+            Json(IndexNodeResponse::err("index not ready (no leader lease)")),
+        )
+            .into_response();
+    }
     // Owner-gated: only the bucket owner may list its objects.
     match state.state_machine.bucket_owner(&bucket).await {
         Ok(Some(owner)) if owner == caller.as_bytes() => {}
@@ -558,6 +595,13 @@ async fn account_quota(
     // contribution smoke); owner/payment-operator-only is a future tightening.
     if let Err(e) = super::auth::verify_request("GET", "account/quota", &body, &headers) {
         return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+    }
+    if let Err(status) = linearizable_read(&state).await {
+        return (
+            status,
+            Json(IndexNodeResponse::err("index not ready (no leader lease)")),
+        )
+            .into_response();
     }
     let account = params.get("account").cloned().unwrap_or_default();
     match state.state_machine.account_quota(&account).await {
