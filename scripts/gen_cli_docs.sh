@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerate the website's content/cli.md from the clap definitions
-# (via examples/gen_cli_docs.rs, which excludes the maintainer-only `index`
+# (via scripts/gen_cli_docs.rs, which excludes the maintainer-only `index`
 # subcommand). The site lives in its own repo at ../arkel-site.
 #
 #   ./scripts/gen_cli_docs.sh
@@ -16,7 +16,7 @@ title = "CLI reference"
 
 # CLI reference
 
-<!-- Auto-generated from the clap definitions (examples/gen_cli_docs.rs, run via
+<!-- Auto-generated from the clap definitions (scripts/gen_cli_docs.rs, run via
 ./scripts/gen_cli_docs.sh). The `index` subcommand is maintainer-only and
 omitted. Do not hand-edit the generated sections below. -->
 
