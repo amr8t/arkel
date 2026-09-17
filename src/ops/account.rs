@@ -14,8 +14,7 @@ pub async fn run(identity: &NodeIdentity, cmd: AccountCmd) -> Result<()> {
             let account = account.unwrap_or_else(|| hex::encode(identity.node_id().as_bytes()));
             let http = reqwest::Client::new();
             let (total, used) =
-                remote::account_quota(&http, &index_addrs, &account, identity.secret_key())
-                    .await?;
+                remote::account_quota(&http, &index_addrs, &account, identity.secret_key()).await?;
             println!("{account}: {used} / {total} bytes used");
             Ok(())
         }

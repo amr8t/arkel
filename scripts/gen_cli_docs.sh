@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Regenerate the website's content/cli.md from the clap definitions
+# Regenerate the website's docs/cli.md from the clap definitions
 # (via scripts/gen_cli_docs.rs, which excludes the maintainer-only `index`
 # subcommand). The site lives in its own repo at ../arkel-site.
 #
 #   ./scripts/gen_cli_docs.sh
 set -euo pipefail
 
-OUT=../arkel-site/content/cli.md
+OUT=../arkel-site/docs/cli.md
 
 {
   cat <<'EOF'
-+++
-title = "CLI reference"
-+++
+---
+title: CLI reference
+---
 
 # CLI reference
 

@@ -292,8 +292,8 @@ impl StateMachineInner {
                         return Ok(IndexNodeResponse::err("forbidden"));
                     }
                 }
-                let new_manifest = crate::manifest::deserialize_manifest(&manifest_bytes)
-                    .map_err(to_io_err)?;
+                let new_manifest =
+                    crate::manifest::deserialize_manifest(&manifest_bytes).map_err(to_io_err)?;
                 // Quota: account = caller (enforced == owner). 507 over limit.
                 if !Self::try_debit(
                     tx,
@@ -315,8 +315,8 @@ impl StateMachineInner {
                     .optional()
                     .map_err(to_io_err)?
                 {
-                    let old = crate::manifest::deserialize_manifest(&existing)
-                        .map_err(to_io_err)?;
+                    let old =
+                        crate::manifest::deserialize_manifest(&existing).map_err(to_io_err)?;
                     Self::release(tx, &hex::encode(&caller), old.ciphertext_size as i64)?;
                     for s in &old.shards {
                         tx.execute(
@@ -483,8 +483,8 @@ impl StateMachineInner {
                     .map_err(to_io_err)?;
                 let old_manifest =
                     crate::manifest::deserialize_manifest(&old).map_err(to_io_err)?;
-                let new_manifest = crate::manifest::deserialize_manifest(&manifest_bytes)
-                    .map_err(to_io_err)?;
+                let new_manifest =
+                    crate::manifest::deserialize_manifest(&manifest_bytes).map_err(to_io_err)?;
                 // Quota: account = the bucket OWNER (caller is the repair operator).
                 // Adjust usage by the ciphertext-size delta.
                 if let Some(o) = role_holder(tx, Role::BucketOwner(&bucket))? {

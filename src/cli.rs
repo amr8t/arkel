@@ -6,8 +6,8 @@ use iroh::PublicKey;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use crate::config::parse_size;
 use crate::client::StorageTarget;
+use crate::config::parse_size;
 
 pub const DEFAULT_INDEX_ADDRS: &str =
     "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003";

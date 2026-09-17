@@ -411,9 +411,9 @@ async fn run_index_node(
     let raft_audit = raft.clone();
     let sm_audit = state_machine_for_api.clone();
     let ep_audit = endpoint.clone();
-    tokio::spawn(
-        async move { crate::index::audit::run(raft_audit, sm_audit, ep_audit, audit_store).await },
-    );
+    tokio::spawn(async move {
+        crate::index::audit::run(raft_audit, sm_audit, ep_audit, audit_store).await
+    });
 
     // Keep the Iroh endpoint alive for future gateway<->storage use.
     let _endpoint = endpoint;

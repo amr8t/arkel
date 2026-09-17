@@ -64,10 +64,7 @@ fn sections(md: &str) -> Vec<(String, String)> {
 
 /// Top-level command name from a section header like "## `arkel client put`".
 fn top_level(header: &str) -> &str {
-    let rest = header
-        .strip_prefix("## `arkel")
-        .unwrap_or_default()
-        .trim();
+    let rest = header.strip_prefix("## `arkel").unwrap_or_default().trim();
     rest.split(['`', ' ']).next().unwrap_or_default().trim()
 }
 

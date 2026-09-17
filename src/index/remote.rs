@@ -161,7 +161,9 @@ async fn index_get(
         let mut req = http.get(format!("{leader}/{url}"));
         if let Some((secret_key, sign_path)) = signed {
             let (auth, time) = auth_headers(secret_key, &reqwest::Method::GET, sign_path, &[]);
-            req = req.header("authorization", auth).header("x-arkel-time", time);
+            req = req
+                .header("authorization", auth)
+                .header("x-arkel-time", time);
         }
         match req.send().await {
             Ok(resp) if resp.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE => {

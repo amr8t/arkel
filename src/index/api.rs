@@ -405,14 +405,12 @@ async fn set_repair_operator(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller =
-        match super::auth::verify_request("POST", "repair-operator", &body, &headers) {
-            Ok(pk) => pk,
-            Err(e) => {
-                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
-                    .into_response();
-            }
-        };
+    let caller = match super::auth::verify_request("POST", "repair-operator", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
     let cmd = IndexNodeRequest::SetRepairOperator {
         caller: caller.as_bytes().to_vec(),
     };
@@ -625,8 +623,7 @@ async fn set_default_quota(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match super::auth::verify_request("POST", "quota/default", &body, &headers)
-    {
+    let caller = match super::auth::verify_request("POST", "quota/default", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -660,14 +657,12 @@ async fn set_payment_operator(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller =
-        match super::auth::verify_request("POST", "payment-operator", &body, &headers) {
-            Ok(pk) => pk,
-            Err(e) => {
-                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
-                    .into_response();
-            }
-        };
+    let caller = match super::auth::verify_request("POST", "payment-operator", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
     let cmd = IndexNodeRequest::SetPaymentOperator {
         caller: caller.as_bytes().to_vec(),
     };
@@ -740,17 +735,14 @@ async fn delete_object(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match super::auth::verify_request(
-        "DELETE",
-        &format!("{bucket}/{key}"),
-        &body,
-        &headers,
-    ) {
-        Ok(pk) => pk,
-        Err(e) => {
-            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
-        }
-    };
+    let caller =
+        match super::auth::verify_request("DELETE", &format!("{bucket}/{key}"), &body, &headers) {
+            Ok(pk) => pk,
+            Err(e) => {
+                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
+                    .into_response();
+            }
+        };
     let cmd = IndexNodeRequest::DeleteManifest {
         bucket,
         key,
@@ -774,14 +766,12 @@ async fn gc_candidates(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller =
-        match super::auth::verify_request("GET", "shards/gc-candidates", &body, &headers) {
-            Ok(pk) => pk,
-            Err(e) => {
-                return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e)))
-                    .into_response();
-            }
-        };
+    let caller = match super::auth::verify_request("GET", "shards/gc-candidates", &body, &headers) {
+        Ok(pk) => pk,
+        Err(e) => {
+            return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
+        }
+    };
     match state
         .state_machine
         .is_registered_node(caller.as_bytes())
@@ -833,8 +823,7 @@ async fn credit_quota(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match super::auth::verify_request("POST", "account/quota", &body, &headers)
-    {
+    let caller = match super::auth::verify_request("POST", "account/quota", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();

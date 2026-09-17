@@ -13,8 +13,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::client::Client as ArkelClient;
-use crate::client::pool::reencode;
 use crate::client::ErasureConfig;
+use crate::client::pool::reencode;
 use crate::index::remote;
 use crate::manifest::deserialize_manifest;
 use crate::storage::blob::get_blob;
