@@ -3,14 +3,24 @@
 #   1. Edit arkel-node.toml (set advertise_addr and capacity).
 #   2. docker compose up -d
 #
+# Any value can be overridden with a .env file:
+#   ARKEL_IMAGE   ghcr.io/amr8t/arkel:latest
+#   ARKEL_NAME    arkel-storage
+#   ARKEL_DATA    arkel-data              # named volume, or a host path for a bind mount
+#   ARKEL_CONFIG  ./arkel-node.toml
+#   ARKEL_USER    (blank = image default; set "uid:gid" for a bind-mounted data dir)
+#
+# iroh uses QUIC/UDP, so host networking is the simplest way to be reachable
+# (and to use the relay when direct connections fail).
 services:
   arkel-storage:
-    image: ghcr.io/amr8t/arkel:latest
-    container_name: arkel-storage
+    image: ${ARKEL_IMAGE:-ghcr.io/amr8t/arkel:latest}
+    container_name: ${ARKEL_NAME:-arkel-storage}
     restart: unless-stopped
     network_mode: host
+    user: ${ARKEL_USER:-}
     volumes:
-      - arkel-data:/var/lib/arkel
-      - ./arkel-node.toml:/etc/arkel/arkel-node.toml:ro
+      - ${ARKEL_DATA:-arkel-data}:/var/lib/arkel
+      - ${ARKEL_CONFIG:-./arkel-node.toml}:/etc/arkel/arkel-node.toml:ro
 volumes:
   arkel-data:

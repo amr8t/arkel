@@ -5,7 +5,7 @@
 [storage]
 addr = "0.0.0.0:9001"
 advertise_addr = "<your-public-ip>:9001"
-data_dir = "/var/lib/arkel/storage-9001"
+data_dir = "/var/lib/arkel"
 index_addrs = ["http://index.pc1.arkeldata.com:8001"]
 capacity = "50GB"
 gc_interval_secs = 3600
