@@ -173,6 +173,11 @@ class StorageNode:
 def env() -> dict[str, str]:
     e = os.environ.copy()
     e.setdefault("RUST_LOG", "info")
+    # Loopback smokes run fast: aggressive Raft timings (production defaults are
+    # cross-region-safe: 250/1000/2000 ms). Override via the environment.
+    e.setdefault("ARKEL_HEARTBEAT_INTERVAL_MS", "10")
+    e.setdefault("ARKEL_ELECTION_TIMEOUT_MIN_MS", "150")
+    e.setdefault("ARKEL_ELECTION_TIMEOUT_MAX_MS", "300")
     return e
 
 

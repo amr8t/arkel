@@ -258,11 +258,24 @@ async fn run_index_node(
     let state_machine = index::ArkelStateMachine::open(db_path).await?;
     let state_machine_for_api = state_machine.clone();
 
+    // Raft timing is env-tunable: loopback smokes can run aggressive timings,
+    // but cross-region deployments need a heartbeat comfortably above the
+    // inter-node RTT (ARKEL_HEARTBEAT_INTERVAL_MS, ARKEL_ELECTION_TIMEOUT_MIN_MS,
+    // ARKEL_ELECTION_TIMEOUT_MAX_MS).
     let config = std::sync::Arc::new(
         openraft::Config {
-            heartbeat_interval: 10,
-            election_timeout_min: 150,
-            election_timeout_max: 300,
+            heartbeat_interval: std::env::var("ARKEL_HEARTBEAT_INTERVAL_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(250),
+            election_timeout_min: std::env::var("ARKEL_ELECTION_TIMEOUT_MIN_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1000),
+            election_timeout_max: std::env::var("ARKEL_ELECTION_TIMEOUT_MAX_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2000),
             max_payload_entries: 4096,
             allow_log_reversion: std::env::var("ARKEL_ALLOW_LOG_REVERSION")
                 .is_ok()
