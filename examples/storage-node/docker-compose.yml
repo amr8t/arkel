@@ -1,10 +1,8 @@
 # Example: run an arkel storage node from the published image.
 #
-#   docker compose up -d
+#   1. Edit arkel-node.toml (set advertise_addr and capacity).
+#   2. docker compose up -d
 #
-# iroh uses QUIC/UDP, so host networking is the simplest way to be reachable
-# (and to use the relay when direct connections fail). The named volume
-# inherits the image's `arkel` ownership, so no uid/gid tuning is needed.
 services:
   arkel-storage:
     image: ghcr.io/amr8t/arkel:latest

@@ -22,29 +22,26 @@ arkel --help```
 
 ## Quickstart
 
-## As an operator
+## As an operator — run a storage node
 
-Run a **storage node** to contribute disk and get quota:
+The easiest way is one command (swap in your public IP and the disk you're
+committing):
 
 ```sh
-arkel storage \
+docker run -d --name arkel-storage --restart unless-stopped --network host \
+  -v arkel-data:/var/lib/arkel \
+  ghcr.io/amr8t/arkel:latest storage \
   --addr 0.0.0.0:9001 \
   --advertise-addr <your-public-ip>:9001 \
   --index-addrs http://index.pc1.arkeldata.com:8001 \
-  --data-dir /var/lib/arkel/storage
+  --data-dir /var/lib/arkel/storage-9001 \
+  --capacity 50GB
 ```
 
-- `--addr` — the QUIC endpoint to bind (default `127.0.0.1:9001`)
-- `--advertise-addr` — the address clients use to reach you (defaults to `--addr`; set your public IP)
-- `--index-addrs` — the public index cluster
-- Identity is auto-generated on first boot into `--data-dir/identity.key`.
+Or use the Compose example in [`examples/storage-node/`](examples/storage-node).
+Full guide: https://arkeldata.com/quickstart
 
-Run an **index node** (part of the Raft metadata quorum):
 
-```sh
-arkel index \
-  --http-addr 0.0.0.0:8001 \
-  --peer-addresses <pubkey@ip:port,...>
 ```
 
 ## As a user

@@ -1,0 +1,11 @@
+# Storage node config, mounted at /etc/arkel/arkel-node.toml.
+#
+# Set advertise_addr to the address clients can reach this node on
+# (your public IP:port), and capacity to the disk you commit.
+[storage]
+addr = "0.0.0.0:9001"
+advertise_addr = "<your-public-ip>:9001"
+data_dir = "/var/lib/arkel/storage-9001"
+index_addrs = ["http://index.pc1.arkeldata.com:8001"]
+capacity = "50GB"
+gc_interval_secs = 3600
