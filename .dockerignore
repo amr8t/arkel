@@ -1,0 +1,9 @@
+target/
+.git/
+.github/
+.venv/
+logs/
+.arkel_*/
+*.log
+docs/
+milestones/
