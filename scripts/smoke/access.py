@@ -53,7 +53,6 @@ def _unsigned_register_rejected() -> bool:
             "node_id": [0] * 32,
             "capacity_bytes": 0,
             "addr": "127.0.0.1:9999",
-            "relay_url": None,
             "registered_at": 0,
         }
     ).encode()

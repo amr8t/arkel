@@ -45,7 +45,6 @@ Network emulation (tc-netem on loopback, requires sudo):
     access   two-identity authz (B can't rm/overwrite A's object)
     parity   kill a storage node, EC recovers
     quorum   kill an index node, Raft 2/3
-    relay    NAT'd node's shards pulled via relay
     repair   kill a node → repair re-encodes/redistributes
     full_ec  full (8,6) over 14 nodes; survive losing all 6 parity nodes + repair
     concentration  explicit 3-node put (14 shards crammed) → repair spreads to all 14
@@ -55,7 +54,7 @@ Network emulation (tc-netem on loopback, requires sudo):
 
 Run all:
 
-    for s in basic delete access parity quorum relay repair account; do \
+    for s in basic delete access parity quorum repair account; do \
       python scripts/run_nodes.py smoke $s; done
 
 Count-parameterized scenarios take `--nodes` (default 3); `full_ec` defaults
