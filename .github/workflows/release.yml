@@ -1,10 +1,8 @@
 name: Release
 
-# Cut a release:
-#   cargo install cargo-edit
-#   cargo set-version 0.2.0
-#   git commit -am "v0.2.0" && git tag v0.2.0 && git push --tags
-# Pushing the tag builds the release binary and publishes it to GitHub Releases.
+# Cut a release: run ./scripts/release.sh <x.y.z> (fmt/clippy/test/build, then
+# commit, tag, and push). Pushing the tag builds the release binary and
+# publishes it to GitHub Releases.
 
 on:
   push:
