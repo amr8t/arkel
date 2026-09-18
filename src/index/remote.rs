@@ -1,31 +1,68 @@
 use anyhow::{Context, Result, bail};
 use std::net::SocketAddr;
 
+/// Expand an index base URL into concrete candidate URLs to probe.
+async fn candidate_urls(url: &str) -> Vec<String> {
+    let parsed = match reqwest::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return vec![url.to_string()],
+    };
+    let host = match parsed.host_str() {
+        Some(h) => h.to_string(),
+        None => return vec![url.to_string()],
+    };
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return vec![url.to_string()];
+    }
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    match tokio::net::lookup_host((host.as_str(), port)).await {
+        Ok(addrs) => {
+            let mut out: Vec<String> = addrs
+                .map(|a| format!("{}://{}", parsed.scheme(), a))
+                .collect();
+            out.sort();
+            out.dedup();
+            if out.is_empty() {
+                vec![url.to_string()]
+            } else {
+                out
+            }
+        }
+        Err(e) => {
+            tracing::warn!("index host {host} did not resolve: {e}");
+            vec![url.to_string()]
+        }
+    }
+}
+
 /// Discover the current Raft leader's base URL among the given index node URLs.
 ///
-/// Reads `/raft/metrics` on each node until it finds the one whose `id`
-/// matches `current_leader`. No discovery/DHT — just a static candidate list.
+/// Reads `/raft/metrics` on each candidate until it finds the one whose `id`
+/// matches `current_leader`. Entries may be individual nodes or a DNS name that
+/// resolves to several nodes. No discovery/DHT — just a static candidate list.
 pub async fn find_leader(http: &reqwest::Client, index_addrs: &[String]) -> Result<String> {
     for url in index_addrs {
-        let resp = match http.get(format!("{url}/raft/metrics")).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("index node {url} unreachable: {e}");
-                continue; // a dead node must not block leader discovery
-            }
-        };
-        let resp: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("index node {url} bad metrics response: {e}");
-                continue;
-            }
-        };
-        let id = resp["id"].as_u64();
-        let leader = resp["current_leader"].as_u64();
-        if let (Some(id), Some(leader)) = (id, leader) {
-            if id == leader {
-                return Ok(url.clone());
+        for base in candidate_urls(url).await {
+            let resp = match http.get(format!("{base}/raft/metrics")).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("index node {base} unreachable: {e}");
+                    continue; // a dead node must not block leader discovery
+                }
+            };
+            let resp: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("index node {base} bad metrics response: {e}");
+                    continue;
+                }
+            };
+            let id = resp["id"].as_u64();
+            let leader = resp["current_leader"].as_u64();
+            if let (Some(id), Some(leader)) = (id, leader) {
+                if id == leader {
+                    return Ok(base);
+                }
             }
         }
     }
@@ -453,4 +490,35 @@ pub async fn set_default_quota(
         secret_key,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::candidate_urls;
+
+    #[tokio::test]
+    async fn candidate_urls_keeps_ip_literal() {
+        assert_eq!(
+            candidate_urls("http://10.0.0.2:8001").await,
+            vec!["http://10.0.0.2:8001".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn candidate_urls_keeps_unparseable() {
+        assert_eq!(
+            candidate_urls("not a url").await,
+            vec!["not a url".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn candidate_urls_expands_hostname() {
+        // localhost resolves to at least 127.0.0.1 on the test host.
+        let urls = candidate_urls("http://localhost:8001").await;
+        assert!(
+            urls.iter().any(|u| u == "http://127.0.0.1:8001"),
+            "expected a 127.0.0.1 candidate, got {urls:?}"
+        );
+    }
 }
