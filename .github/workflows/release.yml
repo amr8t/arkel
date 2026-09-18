@@ -1,8 +1,12 @@
 name: Release
 
-# Cut a release: run ./scripts/release.sh <x.y.z> (fmt/clippy/test/build, then
-# commit, tag, and push). Pushing the tag builds the release binary and
-# publishes it to GitHub Releases.
+# Cut a release:
+#   cargo install cargo-edit
+#   cargo set-version 0.2.0
+#   git commit -am "v0.2.0" && git tag v0.2.0 && git push --tags
+# Pushing the tag builds x86_64 + aarch64 binaries and publishes them to GitHub
+# Releases as arkel-<arch> (+ .sha256). Built on 22.04 so the glibc baseline
+# (2.35) runs on 22.04+ targets.
 
 on:
   push:
@@ -12,20 +16,43 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release
-      - name: Checksum
+      - name: Stage assets
         run: |
-          cd target/release
-          sha256sum arkel > arkel.sha256
-          cat arkel.sha256
+          cp target/release/arkel arkel-${{ matrix.arch }}
+          sha256sum arkel-${{ matrix.arch }} > arkel-${{ matrix.arch }}.sha256
+          cat arkel-${{ matrix.arch }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arkel-${{ matrix.arch }}
+          path: |
+            arkel-${{ matrix.arch }}
+            arkel-${{ matrix.arch }}.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List assets
+        run: ls -la dist
       - uses: softprops/action-gh-release@v2
         with:
-          files: |
-            target/release/arkel
-            target/release/arkel.sha256
+          files: dist/*
