@@ -1,7 +1,7 @@
 /target
 
 # Arkel node data directories
-.arkel_*_data/
+.arkel_*/
 
 # Local log files from scripts/run_nodes.sh
 logs/
