@@ -618,7 +618,6 @@ impl StateMachineInner {
                 node_id,
                 capacity_bytes,
                 addr,
-                relay_url,
                 registered_at,
             } => {
                 // Keep `registered_at` from the FIRST registration so a reboot
@@ -633,7 +632,6 @@ impl StateMachineInner {
                         node_id,
                         capacity_bytes,
                         addr,
-                        relay_url,
                         last_seen: log_index,
                         registered_at: first_registered_at,
                         status: NodeStatus::Online,
@@ -893,21 +891,12 @@ impl ArkelStateMachine {
     }
 
     /// All registered nodes with their health status — the repair health map.
-    pub async fn list_all_nodes(
-        &self,
-    ) -> Result<Vec<(Vec<u8>, String, Option<String>, NodeStatus)>, io::Error> {
+    pub async fn list_all_nodes(&self) -> Result<Vec<(Vec<u8>, String, NodeStatus)>, io::Error> {
         let sm = self.inner.lock().await;
         Ok(sm
             .node_registry
             .iter()
-            .map(|(id, ns)| {
-                (
-                    id.clone(),
-                    ns.addr.clone(),
-                    ns.relay_url.clone(),
-                    ns.status.clone(),
-                )
-            })
+            .map(|(id, ns)| (id.clone(), ns.addr.clone(), ns.status.clone()))
             .collect())
     }
 
@@ -970,14 +959,14 @@ impl ArkelStateMachine {
     pub async fn get_healthy_nodes(
         &self,
         count: usize,
-    ) -> Result<Vec<(Vec<u8>, String, Option<String>)>, io::Error> {
+    ) -> Result<Vec<(Vec<u8>, String)>, io::Error> {
         let sm = self.inner.lock().await;
         let nodes: Vec<_> = sm
             .node_registry
             .iter()
             .filter(|(_, ns)| ns.status == NodeStatus::Online)
             .take(count)
-            .map(|(id, ns)| (id.clone(), ns.addr.clone(), ns.relay_url.clone()))
+            .map(|(id, ns)| (id.clone(), ns.addr.clone()))
             .collect();
         Ok(nodes)
     }

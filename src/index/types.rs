@@ -65,7 +65,6 @@ pub enum IndexNodeRequest {
         node_id: Vec<u8>,
         capacity_bytes: u64,
         addr: String,
-        relay_url: Option<String>,
         registered_at: u64,
     },
     MarkNodesOffline {
@@ -183,7 +182,6 @@ pub struct NodeStats {
     pub node_id: Vec<u8>,
     pub capacity_bytes: u64,
     pub addr: String,
-    pub relay_url: Option<String>,
     pub last_seen: u64,     // Raft log index of last heartbeat
     pub registered_at: u64, // wall-clock secs sent by the node at registration
     pub status: NodeStatus,

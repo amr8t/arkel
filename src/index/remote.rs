@@ -274,7 +274,6 @@ pub async fn index_delete(
 pub struct HealthyNode {
     pub node_id: iroh::PublicKey,
     pub addr: SocketAddr,
-    pub relay_url: Option<String>,
     pub capacity_bytes: u64,
     pub occupied_bytes: u64,
 }
@@ -288,11 +287,9 @@ pub async fn list_healthy_nodes(
         .map(|n| {
             let node_id = n["node_id"].as_str().context("missing node_id")?;
             let addr = n["addr"].as_str().context("missing addr")?;
-            let relay_url = n["relay_url"].as_str().and_then(|s| s.parse().ok());
             Ok(HealthyNode {
                 node_id: node_id.parse()?,
                 addr: addr.parse()?,
-                relay_url,
                 capacity_bytes: n["capacity_bytes"].as_u64().unwrap_or(0),
                 occupied_bytes: n["occupied_bytes"].as_u64().unwrap_or(0),
             })
@@ -388,7 +385,6 @@ pub async fn set_repair_operator(
 pub struct NodeStatusInfo {
     pub node_id: iroh::PublicKey,
     pub addr: SocketAddr,
-    pub relay_url: Option<String>,
     pub offline: bool,
 }
 /// All registered nodes with their Online/Offline status (repair health map).
@@ -405,7 +401,6 @@ pub async fn list_all_nodes(
             Ok(NodeStatusInfo {
                 node_id: n["node_id"].as_str().context("missing node_id")?.parse()?,
                 addr: n["addr"].as_str().context("missing addr")?.parse()?,
-                relay_url: n["relay_url"].as_str().and_then(|s| s.parse().ok()),
                 offline: n["status"].as_str() == Some("Offline"),
             })
         })

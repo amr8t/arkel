@@ -248,7 +248,6 @@ async fn register_node(
         node_id: payload.node_id,
         capacity_bytes: payload.capacity_bytes,
         addr: payload.addr,
-        relay_url: payload.relay_url,
         registered_at: payload.registered_at,
     };
     match state.batch_collector.enqueue(cmd).await {
@@ -456,7 +455,6 @@ pub struct RegisterNodePayload {
     pub node_id: Vec<u8>,
     pub capacity_bytes: u64,
     pub addr: String,
-    pub relay_url: Option<String>,
     pub registered_at: u64,
 }
 
@@ -679,7 +677,6 @@ async fn set_payment_operator(
 pub struct RegisterNode {
     pub node_id: String,
     pub addr: String,
-    pub relay_url: Option<String>,
     pub capacity_bytes: u64,
     pub occupied_bytes: u64,
 }
@@ -700,7 +697,6 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         .map(|(node_id, ns)| RegisterNode {
             node_id: hex::encode(&node_id),
             addr: ns.addr,
-            relay_url: ns.relay_url,
             capacity_bytes: ns.capacity_bytes,
             occupied_bytes: usage.get(&node_id).copied().unwrap_or(0),
         })
@@ -714,11 +710,10 @@ async fn list_all_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse
         Ok(nodes) => {
             let nodes: Vec<_> = nodes
                 .into_iter()
-                .map(|(node_id, addr, relay_url, status)| {
+                .map(|(node_id, addr, status)| {
                     serde_json::json!({
                         "node_id": hex::encode(node_id),
                         "addr": addr,
-                        "relay_url": relay_url,
                         "status": status,
                     })
                 })

@@ -81,7 +81,6 @@ pub fn reconstruct_object(
 pub struct StorageTarget {
     pub node_id: PublicKey,
     pub addr: SocketAddr,
-    pub relay_url: Option<String>,
 }
 
 /// Shared config for data-plane put/get operations.
@@ -193,11 +192,8 @@ async fn pull_shard(
 ) -> Result<()> {
     use crate::storage::PULL_ALPN;
 
-    let mut addrs = vec![iroh::TransportAddr::Ip(target.addr)];
-    if let Some(url) = &target.relay_url {
-        addrs.push(iroh::TransportAddr::Relay(url.parse()?));
-    }
-    let ea = iroh::EndpointAddr::from_parts(target.node_id, addrs);
+    let ea =
+        iroh::EndpointAddr::from_parts(target.node_id, vec![iroh::TransportAddr::Ip(target.addr)]);
     let conn = endpoint.connect(ea, PULL_ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
     send.write_all(blob_hash.as_bytes()).await?;
@@ -246,7 +242,6 @@ pub async fn get(
             .map(|n| StorageTarget {
                 node_id: n.node_id,
                 addr: n.addr,
-                relay_url: n.relay_url,
             })
             .collect()
     } else {
@@ -259,11 +254,7 @@ pub async fn get(
     let mut connects = Vec::with_capacity(targets.len());
     let mut connect_ids = Vec::with_capacity(targets.len());
     for t in &targets {
-        let mut addrs = vec![iroh::TransportAddr::Ip(t.addr)];
-        if let Some(url) = &t.relay_url {
-            addrs.push(iroh::TransportAddr::Relay(url.parse()?));
-        }
-        let ea = iroh::EndpointAddr::from_parts(t.node_id, addrs);
+        let ea = iroh::EndpointAddr::from_parts(t.node_id, vec![iroh::TransportAddr::Ip(t.addr)]);
         connect_ids.push(t.node_id);
         connects.push(async move {
             tokio::time::timeout(
@@ -391,7 +382,6 @@ pub async fn assign_shards(cfg: &ClientConfig) -> Result<(ErasureConfig, Vec<Sto
         .map(|n| StorageTarget {
             node_id: n.node_id,
             addr: n.addr,
-            relay_url: n.relay_url.clone(),
         })
         .collect();
     Ok((ec, targets))

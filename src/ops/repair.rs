@@ -41,11 +41,8 @@ pub async fn run(client: &ArkelClient, register: bool, rate_limit: usize) -> Res
         if n.offline {
             offline.insert(n.node_id);
         } else {
-            let mut addrs = vec![iroh::TransportAddr::Ip(n.addr)];
-            if let Some(url) = &n.relay_url {
-                addrs.push(iroh::TransportAddr::Relay(url.parse()?));
-            }
-            let ea = iroh::EndpointAddr::from_parts(n.node_id, addrs);
+            let ea =
+                iroh::EndpointAddr::from_parts(n.node_id, vec![iroh::TransportAddr::Ip(n.addr)]);
             let _ = client.endpoint.connect(ea, iroh_blobs::ALPN).await;
         }
     }

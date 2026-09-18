@@ -186,18 +186,12 @@ impl Arkel {
                     .await
                     .context("Failed to bind storage endpoint")?;
 
-                let relay_url = loop {
-                    if let Some(u) = endpoint.addr().relay_urls().next() {
-                        break Some(u.to_string());
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                };
-
+                // Storage nodes are direct-only (RelayMode::Disabled): no relay
+                // URL is published, so clients reach them at the advertised IP.
                 tracing::info!(
-                    "Storage Engine Online. ID: {}. endpointId: {}. relay_url: {}. Data: {:?}",
+                    "Storage Engine Online. ID: {}. endpointId: {}. Data: {:?}",
                     self.identity.raft_node_id(),
                     endpoint.id(),
-                    relay_url.as_deref().unwrap_or_default(),
                     disk_store.data_dir()
                 );
 
@@ -206,7 +200,6 @@ impl Arkel {
                     capacity_bytes,
                     advertise_addr.unwrap_or(addr),
                     index_addrs,
-                    relay_url,
                 );
                 tokio::spawn(registrar.run());
 

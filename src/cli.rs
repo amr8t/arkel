@@ -212,7 +212,6 @@ pub fn parse_targets(addrs: &[String]) -> anyhow::Result<Vec<StorageTarget>> {
             Ok(StorageTarget {
                 node_id: node_id.parse::<PublicKey>()?,
                 addr: addr.parse::<SocketAddr>()?,
-                relay_url: None,
             })
         })
         .collect()

@@ -41,13 +41,7 @@ pub async fn run(
             let Ok(sa) = ns.addr.parse::<std::net::SocketAddr>() else {
                 continue;
             };
-            let mut addrs = vec![iroh::TransportAddr::Ip(sa)];
-            if let Some(url) = &ns.relay_url
-                && let Ok(u) = url.parse::<iroh::RelayUrl>()
-            {
-                addrs.push(iroh::TransportAddr::Relay(u));
-            }
-            let ea = iroh::EndpointAddr::from_parts(pk, addrs);
+            let ea = iroh::EndpointAddr::from_parts(pk, vec![iroh::TransportAddr::Ip(sa)]);
             let ep = endpoint.clone();
             connects.push(async move {
                 tokio::time::timeout(Duration::from_secs(3), ep.connect(ea, iroh_blobs::ALPN)).await
