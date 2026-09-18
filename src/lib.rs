@@ -237,9 +237,11 @@ fn build_index_endpoint(addr: SocketAddr) -> Result<iroh::endpoint::Builder> {
 
 /// Storage node: builds an endpoint with N0 defaults.
 fn build_storage_endpoint(addr: SocketAddr) -> Result<iroh::endpoint::Builder> {
+    // Storage nodes are direct-only: no iroh relay, no opt-in. Operators must be
+    // publicly reachable; the relay is reserved for clients (NAT'd, outbound).
     iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .alpns(vec![b"arkel-blobs".to_vec()])
-        .relay_mode(iroh::endpoint::RelayMode::Default)
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(addr)
         .context("Failed to configure storage iroh bind address")
 }
