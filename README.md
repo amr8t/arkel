@@ -1,15 +1,23 @@
 # Arkel
 
-Arkel is object storage pooled together by the community. It aims to serve as a reliable Object store alternative to Cloud Corporations. 
+[Arkel](https://arkeldata.com) is object storage pooled together by the community. It aims to serve as a reliable Object store alternative to Cloud Corporations. 
+* Designed around decentralized ideas.
+* Open Source 
+* Community powered storage
+* Economy for storage operators
+
+Read more: https://arkeldata.com/introduction
+
+## Architecture
 
 ![Arkel architecture](docs/arkel-architecture.drawio.png)
 
-Full design: [architecture overview](https://amr8t.github.io/arkel-site/architecture/overview).
+Full design: [architecture overview](https://arkeldata.com/architecture/overview).
 
 ## Install
 
 ```sh
-curl -fsSL https://amr8t.github.io/arkel-site/install.sh | sh
+curl -fsSL https://arkeldata.com/install.sh | sh
 arkel --help```
 
 ## Quickstart
