@@ -16,6 +16,7 @@ pub struct NodeConfig {
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct IndexConfig {
     pub http_addr: Option<String>,
+    pub advertise_addr: Option<String>,
     pub data_dir: Option<String>,
     pub peers: Option<Vec<String>>,
 }

@@ -32,6 +32,7 @@ pub enum NodeMode {
     Index {
         bootstrap: BootstrapConfig,
         http_addr: SocketAddr,
+        advertise_addr: Option<SocketAddr>,
     },
     /// Storage Node: Uses the standard Iroh Blobs Protocol engine.
     Storage {
@@ -77,8 +78,12 @@ impl ArkelNode {
         let id = u64::from_le_bytes(pk_bytes[..8].try_into().expect("valid pubkey"));
 
         let node_type = match mode {
-            crate::NodeMode::Index { http_addr, .. } => {
-                let host = http_addr.to_string();
+            crate::NodeMode::Index {
+                http_addr,
+                advertise_addr,
+                ..
+            } => {
+                let host = advertise_addr.unwrap_or(*http_addr).to_string();
                 ArkelNodeType::Index(RaftParams {
                     rpc_url: format!("http://{host}"),
                     bind_addr: format!("{}@{}", pubkey, host),
@@ -116,6 +121,7 @@ impl Arkel {
                     NodeMode::Index {
                         bootstrap,
                         http_addr,
+                        ..
                     } => (bootstrap, http_addr),
                     _ => unreachable!(),
                 };

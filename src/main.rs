@@ -177,10 +177,17 @@ async fn main() -> Result<()> {
         }
         Commands::Index {
             http_addr,
+            advertise_addr,
             peer_addresses,
         } => {
             let http_addr =
                 arkel::config::resolve_addr(http_addr, cfg_index.http_addr, "127.0.0.1:8001")?;
+            let advertise_addr = advertise_addr.or_else(|| {
+                cfg_index
+                    .advertise_addr
+                    .as_deref()
+                    .and_then(|s| s.parse().ok())
+            });
             let peers = peer_addresses.or(cfg_index.peers).unwrap_or_default();
             let base = cli_data_dir
                 .clone()
@@ -190,7 +197,9 @@ async fn main() -> Result<()> {
                 });
             let arkel = Arkel::init(base).await?;
             let node_id = arkel.identity.raft_node_id();
-            let my_full_addr = arkel.identity.raft_full_addr(http_addr);
+            let my_full_addr = arkel
+                .identity
+                .raft_full_addr(advertise_addr.unwrap_or(http_addr));
 
             // Filter peers to avoid self-referential network loops
             let filtered_peers: Vec<String> = peers
@@ -213,6 +222,7 @@ async fn main() -> Result<()> {
                         peer_addresses: filtered_peers,
                     },
                     http_addr,
+                    advertise_addr,
                 })
                 .await;
         }

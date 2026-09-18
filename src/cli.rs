@@ -39,6 +39,11 @@ pub enum Commands {
         #[arg(long)]
         http_addr: Option<SocketAddr>,
 
+        /// Address advertised to peers for Raft RPC (defaults to --http-addr).
+        /// Use when binding a wildcard address such as 0.0.0.0.
+        #[arg(long)]
+        advertise_addr: Option<SocketAddr>,
+
         /// Seed nodes to cluster with if initializing or expanding the topology
         #[arg(long, value_delimiter = ',')]
         peer_addresses: Option<Vec<String>>,
