@@ -5,7 +5,35 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Client,
+    Storage,
+    Payment,
+    Repair,
+    Index { port: u16 },
+}
+
+impl Role {
+    fn dir_name(self) -> String {
+        match self {
+            Role::Client => "client".to_string(),
+            Role::Storage => "storage".to_string(),
+            Role::Payment => "payment".to_string(),
+            Role::Repair => "repair".to_string(),
+            Role::Index { port } => format!("index-{port}"),
+        }
+    }
+
+    pub fn default_data_dir(self) -> PathBuf {
+        directories::ProjectDirs::from("", "", "arkel")
+            .expect("no home directory available for the default data dir")
+            .data_dir()
+            .join(self.dir_name())
+    }
+}
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct NodeConfig {

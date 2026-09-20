@@ -136,21 +136,21 @@ async fn main() -> Result<()> {
         Commands::Client { cmd } => {
             let base = cli_data_dir
                 .clone()
-                .unwrap_or_else(|| PathBuf::from("./.arkel_client_data"));
+                .unwrap_or_else(|| arkel::config::Role::Client.default_data_dir());
             let arkel = Arkel::init(base).await?;
             return run_client(arkel.data_dir.clone(), &arkel.identity, cmd).await;
         }
         Commands::Account { cmd } => {
             let base = cli_data_dir
                 .clone()
-                .unwrap_or_else(|| PathBuf::from("./.arkel_account_data"));
+                .unwrap_or_else(|| arkel::config::Role::Client.default_data_dir());
             let arkel = Arkel::init(base).await?;
             return arkel::ops::account::run(&arkel.identity, cmd).await;
         }
         Commands::Payment { cmd } => {
             let base = cli_data_dir
                 .clone()
-                .unwrap_or_else(|| PathBuf::from("./.arkel_payment_data"));
+                .unwrap_or_else(|| arkel::config::Role::Payment.default_data_dir());
             let arkel = Arkel::init(base).await?;
             return arkel::ops::payment::run(&arkel.identity, cmd).await;
         }
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
         } => {
             let base = cli_data_dir
                 .clone()
-                .unwrap_or_else(|| PathBuf::from("./.arkel_repair_data"));
+                .unwrap_or_else(|| arkel::config::Role::Repair.default_data_dir());
             let arkel = Arkel::init(base.clone()).await?;
             return run_repair(
                 base,
@@ -193,7 +193,10 @@ async fn main() -> Result<()> {
                 .clone()
                 .or(cfg_index.data_dir.clone().map(PathBuf::from))
                 .unwrap_or_else(|| {
-                    PathBuf::from(format!("./.arkel_index_{}_data", http_addr.port()))
+                    arkel::config::Role::Index {
+                        port: http_addr.port(),
+                    }
+                    .default_data_dir()
                 });
             let arkel = Arkel::init(base).await?;
             let node_id = arkel.identity.raft_node_id();
@@ -261,7 +264,7 @@ async fn main() -> Result<()> {
             let base = cli_data_dir
                 .clone()
                 .or(cfg_storage.data_dir.clone().map(PathBuf::from))
-                .unwrap_or_else(|| PathBuf::from("./.arkel_storage_data"));
+                .unwrap_or_else(|| arkel::config::Role::Storage.default_data_dir());
             let arkel = Arkel::init(base.clone()).await?;
             let storage_key = arkel.identity.secret_key().clone();
 

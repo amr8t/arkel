@@ -110,6 +110,7 @@ impl Arkel {
 
         let identity =
             identity::NodeIdentity::load_or_create(&data_dir.join("identity.key")).await?;
+        tracing::info!("Data directory: {}", data_dir.display());
         Ok(Self { data_dir, identity })
     }
 
