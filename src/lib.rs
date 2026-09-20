@@ -475,13 +475,25 @@ async fn initialize_raft_cluster(
     let min_node_id = initial_members.keys().next().copied().unwrap_or(my_id);
 
     if my_id == min_node_id {
-        tracing::info!("Node ID is lowest in configuration matrix. Triggering bootstrap...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        match raft.is_initialized().await {
+            Ok(true) => {
+                tracing::info!("Cluster already initialized; skipping bootstrap.");
+            }
+            Ok(false) => {
+                tracing::info!(
+                    "Node ID is lowest in configuration matrix. Triggering bootstrap..."
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-        if let Err(e) = raft.initialize(initial_members).await {
-            tracing::warn!("Consensus initialization bypassed: {:?}", e);
-        } else {
-            tracing::info!("Consensus cluster bootstrap complete.");
+                if let Err(e) = raft.initialize(initial_members).await {
+                    tracing::warn!("Consensus initialization failed: {:?}", e);
+                } else {
+                    tracing::info!("Consensus cluster bootstrap complete.");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to query cluster initialization state: {:?}", e);
+            }
         }
     } else {
         tracing::info!("Passive tracking node active. Awaiting election updates...");
