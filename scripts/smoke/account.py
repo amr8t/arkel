@@ -85,7 +85,7 @@ def run(args) -> int:
     shutil.rmtree(CLIENT_A, ignore_errors=True)
     shutil.rmtree(CLIENT_C, ignore_errors=True)
     shutil.rmtree(CLIENT_D, ignore_errors=True)
-    bring_up_network()
+    bring_up_network(quota=False)
 
     r = payment("register", "--index-addrs", INDEX_FLAG, data_dir=PAYMENT_DATA)
     if r.returncode != 0:

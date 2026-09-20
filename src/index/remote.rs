@@ -97,6 +97,58 @@ fn auth_headers(
     )
 }
 
+/// Percent-encode each path segment (RFC 3986), preserving `/` separators so
+/// object keys may contain slashes.
+fn percent_encode_path(path: &str) -> String {
+    path.split('/')
+        .map(|segment| {
+            let mut out = String::with_capacity(segment.len());
+            for b in segment.bytes() {
+                match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                        out.push(b as char)
+                    }
+                    _ => out.push_str(&format!("%{b:02X}")),
+                }
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Encode the path portion of a route, leaving any `?query` untouched.
+fn percent_encode_route(route: &str) -> String {
+    match route.split_once('?') {
+        Some((path, query)) => format!("{}?{query}", percent_encode_path(path)),
+        None => percent_encode_path(route),
+    }
+}
+
+/// Parse a response body as JSON, turning non-2xx or empty bodies into a clear
+/// error instead of serde's "EOF while parsing a value".
+async fn json_response(resp: reqwest::Response, context: &str) -> Result<serde_json::Value> {
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let detail = text.trim();
+        if detail.is_empty() {
+            bail!("{context}: HTTP {status}");
+        }
+        bail!("{context}: HTTP {status}: {detail}");
+    }
+    serde_json::from_str(&text).with_context(|| {
+        format!(
+            "{context}: invalid JSON response: {:?}",
+            &text[..text.len().min(200)]
+        )
+    })
+}
+
+fn retryable_index_error(error: &str) -> bool {
+    error.contains("ForwardToLeader") || error.contains("raft batch error")
+}
+
 /// Issue a write to the index cluster, transparently surviving leader changes.
 ///
 /// OpenRaft followers reject `client_write` with `ForwardToLeader`, so this
@@ -111,12 +163,14 @@ async fn index_send(
     payload: &serde_json::Value,
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
+    let url_route = percent_encode_route(route);
+    let mut last_error = None;
     for _ in 0..3 {
         let leader = find_leader(http, index_addrs).await?;
         let body = serde_json::to_vec(payload)?;
         let (auth, time) = auth_headers(secret_key, &method, route, &body);
         let resp = http
-            .request(method.clone(), format!("{leader}/{route}"))
+            .request(method.clone(), format!("{leader}/{url_route}"))
             .header("authorization", auth)
             .header("x-arkel-time", time)
             .header("content-type", "application/json")
@@ -125,18 +179,32 @@ async fn index_send(
             .await?;
         let status = resp.status();
         let text = resp.text().await?;
-        let body: serde_json::Value = serde_json::from_str(&text).with_context(|| {
+        if !status.is_success() {
+            bail!("{method} {route}: HTTP {status}: {}", text.trim());
+        }
+        let value: serde_json::Value = serde_json::from_str(&text).with_context(|| {
             format!(
-                "bad response body from {leader}/{route}: status {status}: {:?}",
+                "{method} {route}: invalid JSON response: {:?}",
                 &text[..text.len().min(200)]
             )
         })?;
-        if body.get("success").and_then(|s| s.as_bool()) == Some(true) {
-            return Ok(body);
+        if value.get("success").and_then(|s| s.as_bool()) == Some(true) {
+            return Ok(value);
         }
-        tracing::warn!("index write rejected by {leader}; re-discovering leader");
+        let error = value
+            .get("error")
+            .and_then(|e| e.as_str())
+            .unwrap_or("unknown error");
+        if !retryable_index_error(error) {
+            bail!("{method} {route} rejected: {error}");
+        }
+        tracing::warn!("index write rejected by {leader} ({error}); re-discovering leader");
+        last_error = Some(error.to_string());
     }
-    bail!("index write failed after retries")
+    bail!(
+        "{method} {route} failed after retries: {}",
+        last_error.unwrap_or_else(|| "unknown error".to_string())
+    )
 }
 
 /// POST a write to the index cluster (used by `POST /register`).
@@ -195,7 +263,7 @@ async fn index_get(
 ) -> Result<reqwest::Response> {
     for _ in 0..3 {
         let leader = find_leader(http, index_addrs).await?;
-        let mut req = http.get(format!("{leader}/{url}"));
+        let mut req = http.get(format!("{leader}/{}", percent_encode_route(url)));
         if let Some((secret_key, sign_path)) = signed {
             let (auth, time) = auth_headers(secret_key, &reqwest::Method::GET, sign_path, &[]);
             req = req
@@ -226,7 +294,7 @@ pub async fn index_read(
     route: &str,
 ) -> Result<serde_json::Value> {
     let resp = index_get(http, index_addrs, route, None).await?;
-    Ok(resp.json().await?)
+    json_response(resp, &format!("GET {route}")).await
 }
 
 /// Signed GET for privacy-gated metadata reads (manifest, listings). The
@@ -250,7 +318,7 @@ async fn index_read_signed_url(
     secret_key: &iroh::SecretKey,
 ) -> Result<serde_json::Value> {
     let resp = index_get(http, index_addrs, url, Some((secret_key, sign_path))).await?;
-    Ok(resp.json().await?)
+    json_response(resp, &format!("GET {url}")).await
 }
 
 pub async fn index_delete(

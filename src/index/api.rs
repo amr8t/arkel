@@ -152,10 +152,12 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_buckets))
         .route("/:bucket", put(create_bucket).get(list_objects))
-        .route("/:bucket/:key", delete(delete_object))
+        .route("/:bucket/*key", delete(delete_object))
         .route(
-            "/manifest/:bucket/:key",
-            put(commit_manifest).get(read_manifest),
+            "/manifest/:bucket/*key",
+            put(commit_manifest)
+                .get(read_manifest)
+                .post(repair_manifest),
         )
         .route("/register", post(register_node))
         .route("/nodes", get(list_nodes))
@@ -165,7 +167,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/payment-operator", post(set_payment_operator))
         .route("/manifests", get(list_manifests))
         .route("/repair-operator", post(set_repair_operator))
-        .route("/manifest/:bucket/:key/repair", post(repair_manifest))
         .route("/shards/gc-candidates", get(gc_candidates))
 }
 
@@ -364,7 +365,7 @@ async fn repair_manifest(
 ) -> impl IntoResponse {
     let caller = match super::auth::verify_request(
         "POST",
-        &format!("manifest/{bucket}/{key}/repair"),
+        &format!("manifest/{bucket}/{key}"),
         &body,
         &headers,
     ) {

@@ -20,13 +20,37 @@ STORAGE_PORTS = tuple(range(9001, 9015))
 STORAGE_DATA_DIRS = [
     REPO_ROOT / f".arkel_storage_{port}_data" for port in STORAGE_PORTS
 ]
+PAYMENT_DATA = REPO_ROOT / ".arkel_payment_data"
+DEFAULT_QUOTA = "1TB"
 
 
 def run_nodes(*cmd: str) -> None:
     subprocess.run([sys.executable, str(SCRIPTS / "run_nodes.py"), *cmd], check=True)
 
 
-def bring_up_network(count: int = 3) -> str:
+def ensure_default_quota() -> None:
+    """Register a payment operator and grant a large default quota so local
+    smokes can write. Production leaves the default unset (deny)."""
+    base = [str(BINARY), "payment", "--data-dir", str(PAYMENT_DATA)]
+    r = subprocess.run(
+        [*base, "register", "--index-addrs", INDEX_FLAG],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"payment register failed: {r.stderr.strip()[-400:]}")
+    r = subprocess.run(
+        [*base, "set-default-quota", "--bytes", DEFAULT_QUOTA, "--index-addrs", INDEX_FLAG],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"set-default-quota failed: {r.stderr.strip()[-400:]}")
+
+
+def bring_up_network(count: int = 3, quota: bool = True) -> str:
     """Boot index + storage nodes, return the storage-addrs flag value.
 
     Self-cleans first: stale nodes from prior runs hold ports and write to
@@ -37,6 +61,8 @@ def bring_up_network(count: int = 3) -> str:
     run_nodes("start", "--fresh")
     run_nodes("start-storage", "--count", str(count))
     time.sleep(3)
+    if quota:
+        ensure_default_quota()
     return storage_addrs(count)
 
 

@@ -448,7 +448,7 @@ pub async fn repair_object(
     crate::index::remote::repair_commit(
         &cfg.http,
         &cfg.index_addrs,
-        &format!("manifest/{bucket}/{key}/repair"),
+        &format!("manifest/{bucket}/{key}"),
         &serde_json::json!({
             "object_hash": object_hash.to_vec(),
             "manifest_bytes": manifest_bytes,

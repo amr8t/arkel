@@ -220,14 +220,14 @@ impl StateMachineInner {
         .map_err(to_io_err)
     }
 
-    /// Debit `bytes` from `account`; false if a quota exists and it's exceeded.
+    /// Debit `bytes` from `account`; false if the account has insufficient
+    /// quota. Accounts with no quota row use the cluster-wide default, which is
+    /// `0` (deny all) unless the payment operator sets one.
     fn try_debit(
         tx: &rusqlite::Transaction<'_>,
         account: &str,
         bytes: i64,
     ) -> Result<bool, io::Error> {
-        // Cluster-wide default quota (set by the payment operator) applies
-        // only to accounts with no quota row yet; 0 = unlimited.
         let default_total: i64 = tx
             .query_row("SELECT v FROM sm_meta WHERE k = 'default_quota'", [], |r| {
                 r.get::<_, Vec<u8>>(0)
@@ -237,7 +237,7 @@ impl StateMachineInner {
             .and_then(|v| std::str::from_utf8(&v).ok()?.parse().ok())
             .unwrap_or(0);
         let (total, used) = Self::quota_row(tx, account)?.unwrap_or((default_total, 0));
-        if total > 0 && used + bytes > total {
+        if used + bytes > total {
             return Ok(false);
         }
         tx.execute(
