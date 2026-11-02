@@ -50,16 +50,20 @@ def ensure_default_quota() -> None:
         raise RuntimeError(f"set-default-quota failed: {r.stderr.strip()[-400:]}")
 
 
-def bring_up_network(count: int = 3, quota: bool = True) -> str:
+def bring_up_network(count: int = 3, quota: bool = True, capacity: str | None = None) -> str:
     """Boot index + storage nodes, return the storage-addrs flag value.
 
     Self-cleans first: stale nodes from prior runs hold ports and write to
     deleted inodes, leaving empty logs. kill --all avoids the stacking.
+    `capacity` (e.g. "1500MB") is passed to each storage node's --capacity.
     """
     run_nodes("kill", "--all")
     time.sleep(1)
     run_nodes("start", "--fresh")
-    run_nodes("start-storage", "--count", str(count))
+    storage_cmd = ["start-storage", "--count", str(count)]
+    if capacity:
+        storage_cmd += ["--capacity", capacity]
+    run_nodes(*storage_cmd)
     time.sleep(3)
     if quota:
         ensure_default_quota()

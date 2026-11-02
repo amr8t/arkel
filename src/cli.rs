@@ -177,8 +177,8 @@ pub enum PaymentCmd {
         /// Account (hex iroh pubkey) to credit
         #[arg(long)]
         account: String,
-        /// Bytes of quota to add
-        #[arg(long)]
+        /// Quota to add, e.g. "1GB" / "500MB" (or raw bytes)
+        #[arg(long, value_parser = parse_size)]
         bytes: u64,
         /// Credit source label (e.g. 'payment')
         #[arg(long, default_value = "payment")]

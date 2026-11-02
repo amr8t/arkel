@@ -359,16 +359,21 @@ async fn run_index_node(
         }
     });
 
-    // Contribution grant: leader-only, online ≥ grace → ratio × contributed.
-    // Env-tunable so smokes run fast (ARKEL_GRANT_INTERVAL_SECS,
-    // ARKEL_CONTRIBUTION_GRACE_SECS, ARKEL_CONTRIBUTION_RATIO).
+    // Contribution grant: leader-only, online ≥ grace → one-time credit of
+    // `capacity × ratio`, capped. Env-tunable so smokes run fast
+    // (ARKEL_GRANT_INTERVAL_SECS, ARKEL_CONTRIBUTION_GRACE_SECS,
+    // ARKEL_CONTRIBUTION_RATIO, ARKEL_CONTRIBUTION_CAP).
     let raft_grant = raft.clone();
     let sm_grant = state_machine_for_api.clone();
     tokio::spawn(async move {
         let ratio: f64 = std::env::var("ARKEL_CONTRIBUTION_RATIO")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0.57);
+            .unwrap_or(1.0 / 3.0);
+        let cap: u64 = std::env::var("ARKEL_CONTRIBUTION_CAP")
+            .ok()
+            .and_then(|s| crate::config::parse_size(&s).ok())
+            .unwrap_or(50 * 1024 * 1024 * 1024);
         let grace: u64 = std::env::var("ARKEL_CONTRIBUTION_GRACE_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -389,7 +394,6 @@ async fn run_index_node(
                 .unwrap_or_default()
                 .as_secs();
             let nodes = sm_grant.list_all_node_stats().await.unwrap_or_default();
-            let usage = sm_grant.node_usage().await.unwrap_or_default();
             for (id, ns) in nodes {
                 if ns.status != crate::index::types::NodeStatus::Online {
                     continue;
@@ -397,14 +401,15 @@ async fn run_index_node(
                 if now.saturating_sub(ns.registered_at) < grace {
                     continue;
                 }
-                // Storj-style: earn on real stored bytes (derived from
-                // manifests), capped at the node's declared allocation.
-                let occupied = usage.get(&id).copied().unwrap_or(0).min(ns.capacity_bytes);
-                if occupied == 0 {
+                // One-time grant on the declared allocation (not stored bytes),
+                // capped at ARKEL_CONTRIBUTION_CAP. The stable ref_id makes the
+                // quota_events idempotency key permanent, so each node is
+                // credited exactly once.
+                let bytes = ((ns.capacity_bytes as f64 * ratio) as u64).min(cap);
+                if bytes == 0 {
                     continue;
                 }
-                let bytes = (occupied as f64 * ratio) as u64;
-                let ref_id = format!("contribution-{}-{}", hex::encode(&id), now / 3600);
+                let ref_id = format!("contribution-{}", hex::encode(&id));
                 raft_grant
                     .client_write(crate::index::IndexNodeRequest::ContributionGrant {
                         account_id: hex::encode(&id),
