@@ -66,6 +66,7 @@ pub enum IndexNodeRequest {
         capacity_bytes: u64,
         addr: String,
         registered_at: u64,
+        earn_account: Option<String>,
     },
     MarkNodesOffline {
         node_ids: Vec<Vec<u8>>,
@@ -185,6 +186,7 @@ pub struct NodeStats {
     pub last_seen: u64,     // Raft log index of last heartbeat
     pub registered_at: u64, // wall-clock secs sent by the node at registration
     pub status: NodeStatus,
+    pub earn_account: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

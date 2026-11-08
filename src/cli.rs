@@ -74,6 +74,7 @@ pub enum Commands {
         /// it and pays against real stored bytes (default 1TB).
         #[arg(long, value_parser = parse_size)]
         capacity: Option<u64>,
+        earn_account: Option<String>,
     },
     /// Upload/download objects as an iroh-native client
     Client {
@@ -108,6 +109,8 @@ pub enum Commands {
         #[arg(long, default_value_t = 600)]
         rate_limit: usize,
     },
+    /// Print this node's identity (account id, data dir, key path)
+    Identity,
 }
 
 #[derive(Subcommand, Debug)]

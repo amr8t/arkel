@@ -121,7 +121,9 @@ async fn run_repair(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
 
     let cli = Cli::parse();
     let node_cfg = match &cli.config {
@@ -236,6 +238,7 @@ async fn main() -> Result<()> {
             advertise_addr,
             gc_interval_secs,
             capacity,
+            earn_account,
         } => {
             let addr = arkel::config::resolve_addr(addr, cfg_storage.addr, "127.0.0.1:9001")?;
             let advertise_addr = advertise_addr.or_else(|| {
@@ -377,6 +380,8 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to create shard directory")?;
 
+            let earn_account = earn_account.or(cfg_storage.earn_account);
+
             return arkel
                 .run(NodeMode::Storage {
                     base_dir: base,
@@ -387,8 +392,22 @@ async fn main() -> Result<()> {
                     addr,
                     advertise_addr,
                     capacity_bytes: capacity,
+                    earn_account: earn_account,
                 })
                 .await;
+        }
+        Commands::Identity => {
+            let base = cli_data_dir
+                .clone()
+                .unwrap_or_else(|| arkel::config::Role::Client.default_data_dir());
+            let arkel = Arkel::init(base).await?;
+            println!("account: {}", arkel.identity.node_id());
+            println!("data-dir: {}", arkel.data_dir.display());
+            println!(
+                "key-path: {}",
+                arkel.data_dir.join("identity.key").display()
+            );
+            Ok(())
         }
     }
 }

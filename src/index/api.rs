@@ -250,6 +250,7 @@ async fn register_node(
         capacity_bytes: payload.capacity_bytes,
         addr: payload.addr,
         registered_at: payload.registered_at,
+        earn_account: payload.earn_account,
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -457,6 +458,8 @@ pub struct RegisterNodePayload {
     pub capacity_bytes: u64,
     pub addr: String,
     pub registered_at: u64,
+    #[serde(default)]
+    pub earn_account: Option<String>,
 }
 
 async fn read_manifest(
@@ -680,6 +683,8 @@ pub struct RegisterNode {
     pub addr: String,
     pub capacity_bytes: u64,
     pub occupied_bytes: u64,
+    #[serde(default)]
+    pub earn_account: Option<String>,
 }
 
 async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -700,6 +705,7 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             addr: ns.addr,
             capacity_bytes: ns.capacity_bytes,
             occupied_bytes: usage.get(&node_id).copied().unwrap_or(0),
+            earn_account: ns.earn_account.clone(),
         })
         .collect();
     Json(nodes).into_response()

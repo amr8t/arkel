@@ -619,6 +619,7 @@ impl StateMachineInner {
                 capacity_bytes,
                 addr,
                 registered_at,
+                earn_account,
             } => {
                 // Keep `registered_at` from the FIRST registration so a reboot
                 // doesn't reset the contribution-grant 24h clock.
@@ -626,6 +627,11 @@ impl StateMachineInner {
                     .get(&node_id)
                     .map(|ns| ns.registered_at)
                     .unwrap_or(registered_at);
+
+                let first_earn_account = node_registry
+                    .get(&node_id)
+                    .and_then(|ns| ns.earn_account.clone())
+                    .or(earn_account);
                 node_registry.insert(
                     node_id.clone(),
                     NodeStats {
@@ -635,6 +641,7 @@ impl StateMachineInner {
                         last_seen: log_index,
                         registered_at: first_registered_at,
                         status: NodeStatus::Online,
+                        earn_account: first_earn_account,
                     },
                 );
                 IndexNodeResponse::ok()
