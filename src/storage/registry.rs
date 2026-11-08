@@ -18,7 +18,7 @@ pub struct NodeRegistrar {
     addr: SocketAddr,
     index_addrs: Vec<String>,
     http: reqwest::Client,
-    earn_account: Option<String>,
+    earn_to: Option<String>,
 }
 
 impl NodeRegistrar {
@@ -27,7 +27,7 @@ impl NodeRegistrar {
         capacity_bytes: u64,
         addr: SocketAddr,
         index_addrs: Vec<String>,
-        earn_account: Option<String>
+        earn_to: Option<String>,
     ) -> Self {
         Self {
             node_id: identity.node_id(),
@@ -36,7 +36,7 @@ impl NodeRegistrar {
             addr,
             index_addrs,
             http: reqwest::Client::new(),
-            earn_account: earn_account
+            earn_to,
         }
     }
 
@@ -45,7 +45,8 @@ impl NodeRegistrar {
             "node_id": self.node_id.as_bytes().to_vec(),
             "capacity_bytes": self.capacity_bytes,
             "addr": self.addr.to_string(),
-             "registered_at": std::time::SystemTime::now()
+            "earn_to": self.earn_to,
+            "registered_at": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),

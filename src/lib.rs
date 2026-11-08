@@ -44,7 +44,7 @@ pub enum NodeMode {
         addr: SocketAddr,
         advertise_addr: Option<SocketAddr>,
         capacity_bytes: u64,
-        earn_account: Option<String>,
+        earn_to: Option<String>,
     },
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -155,7 +155,7 @@ impl Arkel {
                     addr,
                     advertise_addr,
                     capacity_bytes,
-                    earn_account,
+                    earn_to,
                 ) = match mode {
                     NodeMode::Storage {
                         base_dir,
@@ -166,7 +166,7 @@ impl Arkel {
                         addr,
                         advertise_addr,
                         capacity_bytes,
-                        earn_account,
+                        earn_to,
                     } => (
                         base_dir,
                         blobs,
@@ -176,7 +176,7 @@ impl Arkel {
                         addr,
                         advertise_addr,
                         capacity_bytes,
-                        earn_account,
+                        earn_to,
                     ),
                     _ => unreachable!(),
                 };
@@ -205,7 +205,7 @@ impl Arkel {
                     capacity_bytes,
                     advertise_addr.unwrap_or(addr),
                     index_addrs,
-                    earn_account,
+                    earn_to,
                 );
                 tokio::spawn(registrar.run());
 
@@ -417,7 +417,7 @@ async fn run_index_node(
                 let ref_id = format!("contribution-{}", hex::encode(&id));
                 raft_grant
                     .client_write(crate::index::IndexNodeRequest::ContributionGrant {
-                        account_id: ns.earn_account.clone().unwrap_or_else(|| hex::encode(&id)),
+                        account_id: ns.earn_to.clone().unwrap_or_else(|| hex::encode(&id)),
                         bytes,
                         source: "contribution".to_string(),
                         ref_id,

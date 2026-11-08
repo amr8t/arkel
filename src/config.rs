@@ -59,7 +59,7 @@ pub struct StorageConfig {
     /// (same syntax as --capacity).
     pub capacity: Option<String>,
     pub gc_interval_secs: Option<u64>,
-    pub earn_account: Option<String>,
+    pub earn_to: Option<String>,
 }
 
 impl NodeConfig {

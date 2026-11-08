@@ -22,7 +22,7 @@ omitted. Do not hand-edit the generated sections below. -->
 
 Default index cluster: `http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1:8003`.
 
-That is the default `--index-addrs` for the `client`, `account`, `payment`,
+That is the default `--index-addrs` for the `client`, `quota`, `payment`,
 `repair`, and `storage` commands (and the `[storage] index_addrs` key in
 `arkel-node.toml`) — point those at the index cluster you run.
 

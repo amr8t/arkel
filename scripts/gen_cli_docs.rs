@@ -7,7 +7,7 @@
 //!
 //! Output layout:
 //!   ## Overview                     (root `arkel` subcommand list + options)
-//!   ## Using Arkel                  client, account
+//!   ## Using Arkel                  client, quota
 //!   ## Running a storage node       storage
 //!   ## Operating the network        payment, repair
 //!
@@ -20,7 +20,7 @@ use clap_markdown::help_markdown_command;
 
 /// Top-level command -> role group title, in display order.
 const GROUPS: &[(&str, &[&str])] = &[
-    ("Using Arkel", &["client", "account"]),
+    ("Using Arkel", &["client", "quota"]),
     ("Running a storage node", &["storage"]),
     ("Operating the network", &["payment", "repair"]),
 ];

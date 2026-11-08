@@ -24,15 +24,15 @@ arkel --help```
 
 ## As an operator — run a storage node
 
-First, get your account id — your storage earnings are credited to it:
+First, get your identity — your storage earnings are credited to it:
 
 ```sh
 arkel identity
-# prints: account: <your-account-id>
+# prints: identity: <your-identity>
 ```
 
 Then run the node (swap in your public IP, the disk you're committing, and the
-account id from above):
+identity from above):
 
 ```sh
 docker run -d --name arkel-storage --restart unless-stopped --network host \
@@ -42,12 +42,12 @@ docker run -d --name arkel-storage --restart unless-stopped --network host \
   --advertise-addr <your-public-ip>:9001 \
   --index-addrs http://index.pc1.arkeldata.com:8001 \
   --data-dir /var/lib/arkel/storage-9001 \
-  --earn-account <your-account-id> \
+  --earn-to <your-identity> \
   --capacity 50GB
 ```
 
 Or use the Compose example in [`examples/storage-node/`](examples/storage-node):
-set `earn_account = "<your-account-id>"` in `arkel-node.toml`, then
+set `earn_to = "<your-identity>"` in `arkel-node.toml`, then
 `docker compose up -d`.
 Full guide: https://arkeldata.com/quickstart
 
@@ -79,14 +79,14 @@ Every command auto-creates an iroh keypair on first run and stores it as
 identities: client/user, storage node, payment operator, and repair operator.
 
 ```sh
-arkel identity   # print your account id + key path
+arkel identity   # print your identity + key path
 ```
 
 - The **client identity is your encryption key** — back it up, losing it loses
   your data.
 - A storage node earns its contribution grant on its own identity by default;
-  point it at your user account with `--earn-account <hex-pubkey>` to earn on
-  the account you spend from.
+  point it at your identity with `--earn-to <hex-pubkey>` to earn on
+  the identity you spend from.
 
 Full details: https://arkeldata.com/identity
 

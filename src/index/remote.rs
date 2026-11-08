@@ -475,17 +475,17 @@ pub async fn list_all_nodes(
         .collect()
 }
 
-pub async fn account_quota(
+pub async fn quota(
     http: &reqwest::Client,
     index_addrs: &[String],
-    account: &str,
+    identity: &str,
     secret_key: &iroh::SecretKey,
 ) -> Result<(u64, u64)> {
     let body = index_read_signed_url(
         http,
         index_addrs,
-        "account/quota",
-        &format!("account/quota?account={account}"),
+        "quota",
+        &format!("quota?identity={identity}"),
         secret_key,
     )
     .await?;
@@ -511,11 +511,11 @@ pub async fn set_payment_operator(
     .await
 }
 
-/// Signed credit of `bytes` quota to an account (idempotent on `ref_id`).
+/// Signed credit of `bytes` quota to an identity (idempotent on `ref_id`).
 pub async fn credit_quota(
     http: &reqwest::Client,
     index_addrs: &[String],
-    account_id: &str,
+    identity: &str,
     bytes: u64,
     source: &str,
     ref_id: &str,
@@ -525,9 +525,9 @@ pub async fn credit_quota(
         http,
         index_addrs,
         reqwest::Method::POST,
-        "account/quota",
+        "quota",
         &serde_json::json!({
-            "account_id": account_id,
+            "identity": identity,
             "bytes": bytes,
             "source": source,
             "ref_id": ref_id,
@@ -537,7 +537,7 @@ pub async fn credit_quota(
     .await
 }
 
-/// Payment operator sets the cluster-wide default quota (bytes) for accounts
+/// Payment operator sets the cluster-wide default quota (bytes) for identities
 /// with no quota row yet. Idempotent upsert — can be re-issued to change it.
 pub async fn set_default_quota(
     http: &reqwest::Client,

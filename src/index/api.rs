@@ -162,7 +162,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/register", post(register_node))
         .route("/nodes", get(list_nodes))
         .route("/nodes/all", get(list_all_nodes))
-        .route("/account/quota", get(account_quota).post(credit_quota))
+        .route("/quota", get(quota).post(credit_quota))
         .route("/quota/default", post(set_default_quota))
         .route("/payment-operator", post(set_payment_operator))
         .route("/manifests", get(list_manifests))
@@ -250,7 +250,7 @@ async fn register_node(
         capacity_bytes: payload.capacity_bytes,
         addr: payload.addr,
         registered_at: payload.registered_at,
-        earn_account: payload.earn_account,
+        earn_to: payload.earn_to,
     };
     match state.batch_collector.enqueue(cmd).await {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
@@ -459,7 +459,7 @@ pub struct RegisterNodePayload {
     pub addr: String,
     pub registered_at: u64,
     #[serde(default)]
-    pub earn_account: Option<String>,
+    pub earn_to: Option<String>,
 }
 
 async fn read_manifest(
@@ -584,16 +584,16 @@ async fn list_objects(
     }
 }
 
-async fn account_quota(
+async fn quota(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // Authenticated read: blocks anonymous enumeration of account balances.
-    // Any valid identity may query any account for beta (payment service +
+    // Authenticated read: blocks anonymous enumeration of quota balances.
+    // Any valid identity may query any identity for beta (payment service +
     // contribution smoke); owner/payment-operator-only is a future tightening.
-    if let Err(e) = super::auth::verify_request("GET", "account/quota", &body, &headers) {
+    if let Err(e) = super::auth::verify_request("GET", "quota", &body, &headers) {
         return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
     }
     if let Err(status) = linearizable_read(&state).await {
@@ -603,10 +603,10 @@ async fn account_quota(
         )
             .into_response();
     }
-    let account = params.get("account").cloned().unwrap_or_default();
-    match state.state_machine.account_quota(&account).await {
+    let identity = params.get("identity").cloned().unwrap_or_default();
+    match state.state_machine.account_quota(&identity).await {
         Ok((total, used)) => Json(serde_json::json!({
-            "account": account,
+            "identity": identity,
             "total_bytes": total,
             "used_bytes": used,
         }))
@@ -684,7 +684,7 @@ pub struct RegisterNode {
     pub capacity_bytes: u64,
     pub occupied_bytes: u64,
     #[serde(default)]
-    pub earn_account: Option<String>,
+    pub earn_to: Option<String>,
 }
 
 async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -705,7 +705,7 @@ async fn list_nodes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             addr: ns.addr,
             capacity_bytes: ns.capacity_bytes,
             occupied_bytes: usage.get(&node_id).copied().unwrap_or(0),
-            earn_account: ns.earn_account.clone(),
+            earn_to: ns.earn_to.clone(),
         })
         .collect();
     Json(nodes).into_response()
@@ -814,7 +814,7 @@ async fn gc_candidates(
 
 #[derive(Deserialize)]
 pub struct CreditQuotaPayload {
-    pub account_id: String,
+    pub identity: String,
     pub bytes: u64,
     pub source: String,
     pub ref_id: String,
@@ -825,7 +825,7 @@ async fn credit_quota(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    let caller = match super::auth::verify_request("POST", "account/quota", &body, &headers) {
+    let caller = match super::auth::verify_request("POST", "quota", &body, &headers) {
         Ok(pk) => pk,
         Err(e) => {
             return (StatusCode::UNAUTHORIZED, Json(IndexNodeResponse::err(&e))).into_response();
@@ -842,7 +842,7 @@ async fn credit_quota(
         }
     };
     let cmd = IndexNodeRequest::AllocateQuota {
-        account_id: payload.account_id,
+        account_id: payload.identity,
         bytes: payload.bytes,
         source: payload.source,
         ref_id: payload.ref_id,

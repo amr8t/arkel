@@ -47,11 +47,10 @@ def account_total(account_hex: str) -> tuple[int, int]:
     r = subprocess.run(
         [
             str(BINARY),
-            "account",
+            "quota",
             "--data-dir",
             str(CLIENT_A),
-            "quota",
-            "--account",
+            "--identity",
             account_hex,
             "--index-addrs",
             INDEX_FLAG,

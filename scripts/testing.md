@@ -49,12 +49,12 @@ Network emulation (tc-netem on loopback, requires sudo):
     full_ec  full (8,6) over 14 nodes; survive losing all 6 parity nodes + repair
     concentration  explicit 3-node put (14 shards crammed) → repair spreads to all 14
     contribute  capacity/occupied in /nodes + occupied-based grant (idempotent) + audit
-    account  quota credit/debit, 507 over limit, release, idempotency
+    quota    credit/debit, 507 over limit, release, idempotency
     perf     throughput benchmark
 
 Run all:
 
-    for s in basic delete access parity quorum repair account; do \
+    for s in basic delete access parity quorum repair quota; do \
       python scripts/run_nodes.py smoke $s; done
 
 Count-parameterized scenarios take `--nodes` (default 3); `full_ec` defaults

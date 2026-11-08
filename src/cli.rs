@@ -74,17 +74,24 @@ pub enum Commands {
         /// it and pays against real stored bytes (default 1TB).
         #[arg(long, value_parser = parse_size)]
         capacity: Option<u64>,
-        earn_account: Option<String>,
+        /// Identity (hex pubkey) to credit this node's contribution grant to
+        /// (default: the node's own identity)
+        #[arg(long)]
+        earn_to: Option<String>,
     },
     /// Upload/download objects as an iroh-native client
     Client {
         #[command(subcommand)]
         cmd: ClientCmd,
     },
-    /// Account & quota tools
-    Account {
-        #[command(subcommand)]
-        cmd: AccountCmd,
+    /// Show quota and usage for an identity (default: this node's identity)
+    Quota {
+        /// Identity (hex iroh pubkey) to query; defaults to this node's identity
+        #[arg(long)]
+        identity: Option<String>,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
     },
     /// Payment-operator tooling (register the quota credit key; first-wins)
     Payment {
@@ -109,7 +116,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 600)]
         rate_limit: usize,
     },
-    /// Print this node's identity (account id, data dir, key path)
+    /// Print this node's identity (hex pubkey, data dir, key path)
     Identity,
 }
 
@@ -155,19 +162,6 @@ pub enum ClientCmd {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum AccountCmd {
-    /// Show quota and usage for an account (default: this identity)
-    Quota {
-        /// Account (hex iroh pubkey); defaults to this node's identity
-        #[arg(long)]
-        account: Option<String>,
-        /// Index node HTTP URLs (comma-separated)
-        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
-        index_addrs: Vec<String>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
 pub enum PaymentCmd {
     /// Register this identity as the payment operator (one-time, first-wins)
     Register {
@@ -175,11 +169,11 @@ pub enum PaymentCmd {
         #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
         index_addrs: Vec<String>,
     },
-    /// Credit quota to an account (idempotent on --ref-id)
+    /// Credit quota to an identity (idempotent on --ref-id)
     Credit {
-        /// Account (hex iroh pubkey) to credit
+        /// Identity (hex iroh pubkey) to credit
         #[arg(long)]
-        account: String,
+        to: String,
         /// Quota to add, e.g. "1GB" / "500MB" (or raw bytes)
         #[arg(long, value_parser = parse_size)]
         bytes: u64,
@@ -193,7 +187,7 @@ pub enum PaymentCmd {
         #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
         index_addrs: Vec<String>,
     },
-    /// Set the cluster-wide default quota for accounts with no quota row yet
+    /// Set the cluster-wide default quota for identities with no quota row yet
     /// (applies at first use; idempotent upsert, changeable)
     SetDefaultQuota {
         /// Default quota, e.g. "1GB" (same syntax as --capacity)

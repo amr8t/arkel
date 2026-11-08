@@ -142,12 +142,15 @@ async fn main() -> Result<()> {
             let arkel = Arkel::init(base).await?;
             return run_client(arkel.data_dir.clone(), &arkel.identity, cmd).await;
         }
-        Commands::Account { cmd } => {
+        Commands::Quota {
+            identity,
+            index_addrs,
+        } => {
             let base = cli_data_dir
                 .clone()
                 .unwrap_or_else(|| arkel::config::Role::Client.default_data_dir());
             let arkel = Arkel::init(base).await?;
-            return arkel::ops::account::run(&arkel.identity, cmd).await;
+            return arkel::ops::quota::run(&arkel.identity, index_addrs, identity).await;
         }
         Commands::Payment { cmd } => {
             let base = cli_data_dir
@@ -238,7 +241,7 @@ async fn main() -> Result<()> {
             advertise_addr,
             gc_interval_secs,
             capacity,
-            earn_account,
+            earn_to,
         } => {
             let addr = arkel::config::resolve_addr(addr, cfg_storage.addr, "127.0.0.1:9001")?;
             let advertise_addr = advertise_addr.or_else(|| {
@@ -380,7 +383,7 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to create shard directory")?;
 
-            let earn_account = earn_account.or(cfg_storage.earn_account);
+            let earn_to = earn_to.or(cfg_storage.earn_to);
 
             return arkel
                 .run(NodeMode::Storage {
@@ -392,7 +395,7 @@ async fn main() -> Result<()> {
                     addr,
                     advertise_addr,
                     capacity_bytes: capacity,
-                    earn_account: earn_account,
+                    earn_to: earn_to,
                 })
                 .await;
         }
@@ -401,7 +404,7 @@ async fn main() -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| arkel::config::Role::Client.default_data_dir());
             let arkel = Arkel::init(base).await?;
-            println!("account: {}", arkel.identity.node_id());
+            println!("identity: {}", arkel.identity.node_id());
             println!("data-dir: {}", arkel.data_dir.display());
             println!(
                 "key-path: {}",

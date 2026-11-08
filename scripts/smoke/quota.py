@@ -41,9 +41,9 @@ def _expect_fail(fn, label: str) -> bool:
     try:
         fn()
     except RuntimeError:
-        print(f"[smoke:account] {label}: rejected as expected")
+        print(f"[smoke:quota] {label}: rejected as expected")
         return True
-    print(f"[smoke:account] FAIL: {label} was allowed")
+    print(f"[smoke:quota] FAIL: {label} was allowed")
     return False
 
 
@@ -52,10 +52,9 @@ def account_quota(data_dir: Path) -> tuple[str, int, int]:
     r = subprocess.run(
         [
             str(BINARY),
-            "account",
+            "quota",
             "--data-dir",
             str(data_dir),
-            "quota",
             "--index-addrs",
             INDEX_FLAG,
         ],
@@ -79,7 +78,7 @@ def payment(*args: str, data_dir: Path) -> subprocess.CompletedProcess:
 
 
 def run(args) -> int:
-    print("[smoke:account] booting 3 index nodes + 3 storage nodes...")
+    print("[smoke:quota] booting 3 index nodes + 3 storage nodes...")
 
     shutil.rmtree(PAYMENT_DATA, ignore_errors=True)
     shutil.rmtree(CLIENT_A, ignore_errors=True)
@@ -89,16 +88,16 @@ def run(args) -> int:
 
     r = payment("register", "--index-addrs", INDEX_FLAG, data_dir=PAYMENT_DATA)
     if r.returncode != 0:
-        print(f"[smoke:account] FAIL: payment operator register: {r.stderr.strip()[-300:]}")
+        print(f"[smoke:quota] FAIL: payment operator register: {r.stderr.strip()[-300:]}")
         return 1
-    print("[smoke:account] payment operator registered")
+    print("[smoke:quota] payment operator registered")
 
     acct_a, _, _ = account_quota(CLIENT_A)
-    print(f"[smoke:account] client A account {acct_a[:16]}...")
+    print(f"[smoke:quota] client A account {acct_a[:16]}...")
 
     r = payment(
         "credit",
-        "--account",
+        "--to",
         acct_a,
         "--bytes",
         str(CREDIT_BYTES),
@@ -111,9 +110,9 @@ def run(args) -> int:
         data_dir=PAYMENT_DATA,
     )
     if r.returncode != 0:
-        print(f"[smoke:account] FAIL: credit: {r.stderr.strip()[-300:]}")
+        print(f"[smoke:quota] FAIL: credit: {r.stderr.strip()[-300:]}")
         return 1
-    print("[smoke:account] credited A with 2MB")
+    print("[smoke:quota] credited A with 2MB")
 
     ok = _expect_fail(
         lambda: _credit_or_raise(CLIENT_C, acct_a, "smoke-1"),
@@ -122,13 +121,13 @@ def run(args) -> int:
 
     small = random_file(1024 * 1024)
     put("smoke", "data.bin", small, data_dir=CLIENT_A)
-    print("[smoke:account] A put 1MB OK")
+    print("[smoke:quota] A put 1MB OK")
 
     _, used, total = account_quota(CLIENT_A)
     if not (0 < used < total):
-        print(f"[smoke:account] FAIL: expected 0 < used < total, got used={used} total={total}")
+        print(f"[smoke:quota] FAIL: expected 0 < used < total, got used={used} total={total}")
         return 1
-    print(f"[smoke:account] quota after put: used={used} total={total}")
+    print(f"[smoke:quota] quota after put: used={used} total={total}")
 
     big = random_file(4 * 1024 * 1024)
     ok &= _expect_fail(
@@ -139,13 +138,13 @@ def run(args) -> int:
     rm("smoke", "data.bin", data_dir=CLIENT_A)
     _, used, _ = account_quota(CLIENT_A)
     if used != 0:
-        print(f"[smoke:account] FAIL: expected used == 0 after rm, got {used}")
+        print(f"[smoke:quota] FAIL: expected used == 0 after rm, got {used}")
         return 1
-    print("[smoke:account] quota released after rm (used == 0)")
+    print("[smoke:quota] quota released after rm (used == 0)")
 
     r = payment(
         "credit",
-        "--account",
+        "--to",
         acct_a,
         "--bytes",
         str(CREDIT_BYTES),
@@ -158,13 +157,13 @@ def run(args) -> int:
         data_dir=PAYMENT_DATA,
     )
     if r.returncode != 0:
-        print(f"[smoke:account] FAIL: idempotent re-credit: {r.stderr.strip()[-300:]}")
+        print(f"[smoke:quota] FAIL: idempotent re-credit: {r.stderr.strip()[-300:]}")
         return 1
     _, _, total2 = account_quota(CLIENT_A)
     if total2 != total:
-        print(f"[smoke:account] FAIL: re-credit changed total {total} -> {total2}")
+        print(f"[smoke:quota] FAIL: re-credit changed total {total} -> {total2}")
         return 1
-    print("[smoke:account] idempotent re-credit: total unchanged")
+    print("[smoke:quota] idempotent re-credit: total unchanged")
 
     # ---- default quota ----
     r = payment(
@@ -176,9 +175,9 @@ def run(args) -> int:
         data_dir=PAYMENT_DATA,
     )
     if r.returncode != 0:
-        print(f"[smoke:account] FAIL: set-default-quota: {r.stderr.strip()[-300:]}")
+        print(f"[smoke:quota] FAIL: set-default-quota: {r.stderr.strip()[-300:]}")
         return 1
-    print("[smoke:account] set cluster default quota to 1MB")
+    print("[smoke:quota] set cluster default quota to 1MB")
 
     ok &= _expect_fail(
         lambda: _set_default_or_raise(CLIENT_C),
@@ -187,14 +186,14 @@ def run(args) -> int:
 
     acct_d, used_d, total_d = account_quota(CLIENT_D)
     if used_d != 0 or total_d != DEFAULT_BYTES:
-        print(f"[smoke:account] FAIL: fresh account should get default quota, "
+        print(f"[smoke:quota] FAIL: fresh account should get default quota, "
               f"got used={used_d} total={total_d}")
         return 1
-    print(f"[smoke:account] fresh identity {acct_d[:16]}... sees default quota "
+    print(f"[smoke:quota] fresh identity {acct_d[:16]}... sees default quota "
           f"{total_d} bytes")
 
     put("smoke_d", "half.bin", random_file(512 * 1024), data_dir=CLIENT_D)
-    print("[smoke:account] D put 0.5MB OK (within default)")
+    print("[smoke:quota] D put 0.5MB OK (within default)")
 
     ok &= _expect_fail(
         lambda: put("smoke_d", "over.bin", random_file(1024 * 1024), data_dir=CLIENT_D),
@@ -203,7 +202,7 @@ def run(args) -> int:
 
     r = payment(
         "credit",
-        "--account",
+        "--to",
         acct_d,
         "--bytes",
         str(DEFAULT_BYTES),
@@ -216,32 +215,32 @@ def run(args) -> int:
         data_dir=PAYMENT_DATA,
     )
     if r.returncode != 0:
-        print(f"[smoke:account] FAIL: credit D: {r.stderr.strip()[-300:]}")
+        print(f"[smoke:quota] FAIL: credit D: {r.stderr.strip()[-300:]}")
         return 1
     _, _, total_d2 = account_quota(CLIENT_D)
     if total_d2 != 2 * DEFAULT_BYTES:
-        print(f"[smoke:account] FAIL: AllocateQuota should top up default to "
+        print(f"[smoke:quota] FAIL: AllocateQuota should top up default to "
               f"{2 * DEFAULT_BYTES}, got {total_d2}")
         return 1
-    print("[smoke:account] AllocateQuota topped up default quota (default + 1MB)")
+    print("[smoke:quota] AllocateQuota topped up default quota (default + 1MB)")
 
     put("smoke_d", "more.bin", random_file(1024 * 1024), data_dir=CLIENT_D)
-    print("[smoke:account] D put 1MB OK (within topped-up quota)")
+    print("[smoke:quota] D put 1MB OK (within topped-up quota)")
 
     if ok:
         print(
-            "[smoke:account] PASS: credit, debit, 507, release, idempotency, "
+            "[smoke:quota] PASS: credit, debit, 507, release, idempotency, "
             "non-operator rejection, default quota all correct"
         )
         return 0
-    print("[smoke:account] FAIL: one or more checks failed")
+    print("[smoke:quota] FAIL: one or more checks failed")
     return 1
 
 
 def _credit_or_raise(data_dir: Path, account: str, ref_id: str) -> None:
     r = payment(
         "credit",
-        "--account",
+        "--to",
         account,
         "--bytes",
         str(CREDIT_BYTES),
