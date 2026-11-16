@@ -310,7 +310,7 @@ pub async fn index_read_signed(
 
 /// Signed GET where the signing path differs from the URL — query strings are
 /// NOT part of the signature, so routes carrying `?query=` sign the bare path.
-async fn index_read_signed_url(
+pub async fn index_read_signed_url(
     http: &reqwest::Client,
     index_addrs: &[String],
     sign_path: &str,

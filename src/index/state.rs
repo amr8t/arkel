@@ -844,17 +844,21 @@ impl ArkelStateMachine {
         &self,
         bucket: &str,
         key: &str,
-    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, io::Error> {
+    ) -> Result<Option<(Vec<u8>, Vec<u8>, u64)>, io::Error> {
         let sm = self.inner.lock().await;
         let mut stmt = sm
             .conn
             .prepare_cached(
-                "SELECT manifest, signature FROM manifests WHERE bucket = ?1 AND key = ?2",
+                "SELECT manifest, signature, created_at FROM manifests WHERE bucket = ?1 AND key = ?2",
             )
             .map_err(to_io_err)?;
         let result = stmt
             .query_row(params![bucket, key], |r| {
-                Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?))
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, i64>(2)?.max(0) as u64,
+                ))
             })
             .optional()
             .map_err(to_io_err)?;
@@ -862,18 +866,51 @@ impl ArkelStateMachine {
     }
 
     /// Read API: list object keys in a bucket.
-    pub async fn list_objects(&self, bucket: &str) -> Result<Vec<String>, io::Error> {
-        let sm = self.inner.lock().await;
-        let mut stmt = sm
-            .conn
-            .prepare_cached("SELECT key FROM manifests WHERE bucket = ?1 ORDER BY key")
-            .map_err(to_io_err)?;
-        let keys = stmt
-            .query_map(params![bucket], |r| r.get::<_, String>(0))
-            .map_err(to_io_err)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(to_io_err)?;
-        Ok(keys)
+    /// `(key, size, etag, created_at)` for every object in `bucket`, by key.
+    ///
+    /// Manifests are deserialized *after* dropping the state-machine lock: the
+    /// same mutex guards Raft apply, so parsing thousands of manifests inside it
+    /// would stall writes.
+    pub async fn list_objects(
+        &self,
+        bucket: &str,
+    ) -> Result<Vec<(String, u64, String, u64)>, io::Error> {
+        let rows: Vec<(String, Vec<u8>, i64)> = {
+            let sm = self.inner.lock().await;
+            let mut stmt = sm
+                .conn
+                .prepare_cached(
+                    "SELECT key, manifest, created_at FROM manifests WHERE bucket = ?1 ORDER BY key",
+                )
+                .map_err(to_io_err)?;
+            let rows = stmt
+                .query_map(params![bucket], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(to_io_err)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(to_io_err)?;
+            rows
+        };
+        Ok(rows
+            .into_iter()
+            .map(|(key, manifest_bytes, created_at)| {
+                let at = created_at.max(0) as u64;
+                match crate::manifest::deserialize_manifest(&manifest_bytes) {
+                    Ok(m) => (
+                        key,
+                        m.original_size,
+                        crate::manifest::etag_from_hash(&m.object_hash),
+                        at,
+                    ),
+                    Err(_) => (key, 0, String::new(), at),
+                }
+            })
+            .collect())
     }
 
     /// All (bucket, key, manifest_bytes) — the repair scan source.

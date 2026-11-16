@@ -399,6 +399,35 @@ async fn main() -> Result<()> {
                 })
                 .await;
         }
+        Commands::S3 {
+            listen,
+            index_addrs,
+            max_object_size,
+            gc_interval_secs,
+        } => {
+            let base = cli_data_dir
+                .clone()
+                .unwrap_or_else(|| arkel::config::Role::Client.default_data_dir());
+            let arkel = Arkel::init(base).await?;
+            // The S3 gateway is long-lived, so its blob store needs GC: shards
+            // forwarded by this process are otherwise never reclaimed.
+            let store = arkel::client::open_store_with_gc(
+                &arkel.data_dir.join("blobs"),
+                std::time::Duration::from_secs(gc_interval_secs),
+            )
+            .await?;
+            let cfg = ClientConfig {
+                index_addrs,
+                secret_key: arkel.identity.secret_key().clone(),
+                ec_config: ErasureConfig { k: 8, m: 6 },
+                http: reqwest::Client::new(),
+            };
+            let client = ArkelClient::from_store(cfg, store).await?;
+            let endpoint = client.endpoint.clone();
+            let result = arkel::s3::serve(client, listen, max_object_size).await;
+            endpoint.close().await;
+            return result;
+        }
         Commands::Identity => {
             let base = cli_data_dir
                 .clone()

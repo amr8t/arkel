@@ -490,9 +490,10 @@ async fn read_manifest(
     match state.state_machine.bucket_owner(&bucket).await {
         Ok(Some(owner)) if owner == caller.as_bytes() => {
             match state.state_machine.read_manifest(&bucket, &key).await {
-                Ok(Some((manifest_bytes, signature))) => Json(serde_json::json!({
+                Ok(Some((manifest_bytes, signature, created_at))) => Json(serde_json::json!({
                     "manifest_bytes": manifest_bytes,
                     "signature": signature,
+                    "created_at": created_at,
                 }))
                 .into_response(),
                 Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({}))).into_response(),
@@ -553,15 +554,15 @@ async fn list_objects(
         .unwrap_or(1000);
 
     match state.state_machine.list_objects(&bucket).await {
-        Ok(keys) => {
-            let mut contents: Vec<_> = keys
+        Ok(rows) => {
+            let mut contents: Vec<_> = rows
                 .into_iter()
-                .filter(|k| k.starts_with(&prefix))
-                .map(|k| ListedObject {
-                    key: k,
-                    last_modified: 0,
-                    etag: String::new(),
-                    size: 0,
+                .filter(|(k, _, _, _)| k.starts_with(&prefix))
+                .map(|(key, size, etag, last_modified)| ListedObject {
+                    key,
+                    last_modified,
+                    etag,
+                    size,
                 })
                 .collect();
 

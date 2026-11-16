@@ -116,6 +116,23 @@ pub enum Commands {
         #[arg(long, default_value_t = 600)]
         rate_limit: usize,
     },
+    /// Serve a minimal S3-compatible API in front of the client library, so
+    /// backup tools (Duplicati, restic, rclone) can use Arkel as a target
+    S3 {
+        /// Address to bind the S3 HTTP API to. Keep this on loopback or a private
+        /// container network: the gateway does not authenticate requests
+        #[arg(long, default_value = "127.0.0.1:9000")]
+        listen: SocketAddr,
+        /// Index node HTTP URLs (comma-separated)
+        #[arg(long, value_delimiter = ',', default_value = DEFAULT_INDEX_ADDRS)]
+        index_addrs: Vec<String>,
+        /// Largest accepted object in bytes (bounds memory: peak RSS ~4x this)
+        #[arg(long, default_value_t = 64 * 1024 * 1024)]
+        max_object_size: usize,
+        /// Blob-store GC interval in seconds for forwarded shards (0 disables)
+        #[arg(long, default_value_t = 3600)]
+        gc_interval_secs: u64,
+    },
     /// Print this node's identity (hex pubkey, data dir, key path)
     Identity,
 }

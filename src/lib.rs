@@ -15,6 +15,7 @@ pub mod identity;
 pub mod index;
 pub mod manifest;
 pub mod ops;
+pub mod s3;
 pub mod storage;
 
 /// Index-node cluster seed addresses.

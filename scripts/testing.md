@@ -51,6 +51,17 @@ Network emulation (tc-netem on loopback, requires sudo):
     contribute  capacity/occupied in /nodes + occupied-based grant (idempotent) + audit
     quota    credit/debit, 507 over limit, release, idempotency
     perf     throughput benchmark
+    s3       S3 gateway: protocol (put/get/head/range/list/delete), restic
+             init+backup+check+restore, and an incrementality assertion
+
+The `s3` smoke runs `arkel s3` on :9000 beside the cluster: protocol checks over
+plain HTTP, then restic backup/verify/restore if `restic` is installed.
+
+- No auth: clients need non-blank credentials, which are ignored. Keep the
+  listener on loopback or a private network.
+- Node state lives in `$XDG_DATA_HOME/arkel/index-*`, which `start --fresh` does
+  not wipe. For a clean cluster: `XDG_DATA_HOME=$(mktemp -d) python
+  scripts/run_nodes.py smoke s3`.
 
 Run all:
 
